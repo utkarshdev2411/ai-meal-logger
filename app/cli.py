@@ -4,6 +4,14 @@
 runs the graph, and prints the reply. Thread state persists across turns
 within this process via an in-memory checkpointer (`MemorySaver`) built once
 at startup and threaded through every turn's fresh graph build.
+
+After each reply, background memory extraction (FR-5.5) is kicked off via
+`asyncio.create_task` — never awaited before the next prompt, so it adds 0ms
+to the turn. It opens its OWN db session rather than reusing the turn's: the
+turn's `async with async_session_factory()` block has already exited (and may
+close/recycle its connection) by the time the background task actually runs.
+Pending tasks are tracked and drained with `asyncio.gather` on clean exit so a
+still-in-flight extraction isn't silently dropped.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.agent.graph import build_graph
 from app.db import repo
 from app.db.client import async_session_factory, create_all
+from app.memory.extractor import extract_and_write
 
 DEMO_EXTERNAL_ID = "demo"
 THREAD_ID = "cli"
@@ -38,6 +47,11 @@ async def run_turn(checkpointer: MemorySaver, user_id: str, text: str) -> str:
         return "(no reply)"
 
 
+async def _run_extraction(user_id: str, text: str, reply: str) -> None:
+    async with async_session_factory() as session:
+        await extract_and_write(session, user_id, text, reply)
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="CalorAI text-path CLI")
     parser.add_argument("--image", help="path to an image")
@@ -51,6 +65,7 @@ async def main() -> None:
         user = await repo.get_or_create_user(session, DEMO_EXTERNAL_ID)
     user_id = user.id
 
+    background_tasks: set[asyncio.Task] = set()
     print("CalorAI — type a message (Ctrl-D to quit)")
     while True:
         try:
@@ -62,6 +77,13 @@ async def main() -> None:
             continue
         reply = await run_turn(checkpointer, user_id, text)
         print(f"bot> {reply}")
+
+        task = asyncio.create_task(_run_extraction(user_id, text, reply))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+
+    if background_tasks:
+        await asyncio.gather(*background_tasks, return_exceptions=True)
 
 
 if __name__ == "__main__":
