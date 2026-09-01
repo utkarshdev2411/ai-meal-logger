@@ -217,6 +217,18 @@ async def get_active_memories(session: AsyncSession, user_id: str) -> list[Memor
     return list(result.scalars().all())
 
 
+async def touch_memories(session: AsyncSession, memory_ids: list[str]) -> None:
+    """Bump use_count/last_used_at for memories selected into a prompt (FR-5.7)."""
+    if not memory_ids:
+        return
+    now = _now()
+    result = await session.execute(select(Memory).where(Memory.id.in_(memory_ids)))
+    for memory in result.scalars().all():
+        memory.use_count += 1
+        memory.last_used_at = now
+    await session.commit()
+
+
 async def insert_latency_sample(
     session: AsyncSession,
     turn_id: str,
