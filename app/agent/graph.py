@@ -1,12 +1,14 @@
 """LangGraph text-path agent core (FR-4.1, FR-4.4-FR-4.7).
 
 Graph shape follows CONTEXT.md §5's diagram, sized to what exists this phase:
-`load_session` -> `agent` (tool loop) -> respond. The `memory_retrieve` /
-`vision_extract` fan-out isn't built yet (memory is Phase 5, vision Phase 7,
-neither exists in this repo), so `load_session` (done in `app/cli.py` before
-the graph even runs — opening the session and resolving `user_id`) feeds
-straight into `agent`. Adding those nodes later is wiring a parallel branch in
-front of `agent`, not a rewrite — the seam is deliberate.
+`load_session` -> `agent` (tool loop) -> respond. The full `asyncio.gather`
+prefetch node (memories + totals + meal digest, run in parallel with vision)
+is Phase 6's job; this phase only wires memory in, as a synchronous
+`retrieve_memories` call at the top of `agent_node`. `vision_extract` isn't
+built yet either (Phase 7), so `load_session` (done in `app/cli.py` before the
+graph even runs — opening the session and resolving `user_id`) feeds straight
+into `agent`. Adding those nodes later is wiring a parallel branch in front of
+`agent`, not a rewrite — the seam is deliberate.
 
 Session/user_id binding: tools need a live DB session and a user_id, but a
 compiled LangGraph graph is normally built once and reused. Here `build_graph`
@@ -28,10 +30,11 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.prompts import build_system_prompt
 from app.agent.state import AgentState
 from app.agent.tools import build_tools
 from app.config import get_settings
+from app.memory.store import render_memory_block, retrieve_memories
 
 
 def _trim_history(messages: list[BaseMessage], history_turns: int) -> list[BaseMessage]:
@@ -77,8 +80,14 @@ def build_graph(
     llm_with_tools = (llm or build_llm()).bind_tools(tools)
 
     async def agent_node(state: AgentState) -> dict:
+        # Synchronous retrieve-then-prompt, once per graph invocation. Real
+        # (not stubbed) memory-in-context, just not yet fanned out in
+        # parallel with vision — that's Phase 6's `asyncio.gather` prefetch
+        # node, which will move this call rather than replace it.
+        memories = await retrieve_memories(session, user_id)
+        system_prompt = build_system_prompt(render_memory_block(memories))
         history = _trim_history(state["messages"], settings.history_turns)
-        prompt = [SystemMessage(content=SYSTEM_PROMPT), *history]
+        prompt = [SystemMessage(content=system_prompt), *history]
         response = await llm_with_tools.ainvoke(prompt)
         return {"messages": [response]}
 
