@@ -1,0 +1,32 @@
+# Pinned direct dependencies. Transitives are resolved by pip.
+# Python 3.11+ required.
+
+# --- agent ---
+langgraph==1.2.11
+langchain-core==1.6.1
+langchain-openai==1.6.0        # OpenAI-compatible client; works against any base_url
+
+# --- validation / config ---
+pydantic==2.13.5
+pydantic-settings==2.15.0
+
+# --- persistence ---
+SQLAlchemy[asyncio]==2.0.52
+aiosqlite==0.22.1              # sqlite+aiosqlite driver (default, zero-setup demo)
+asyncpg==0.31.0                # postgresql+asyncpg driver (hosted Postgres / Supabase)
+
+# --- http surface ---
+fastapi==0.141.1
+uvicorn==0.52.4
+python-multipart==0.0.32       # multipart image upload
+httpx==0.28.1
+
+# --- media ---
+pillow==12.3.0                 # image downscale before the vision call
+
+# --- misc ---
+PyYAML==6.0.3                  # evals/cases.yaml
+
+# --- tests ---
+pytest==9.1.1
+pytest-asyncio==1.4.0

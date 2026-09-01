@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AI Engineer Test Task file
+AI Engineer Test Task*.md
+
+# Documentation folder
+docs/
+
+# Local database files
+*.db
+*.db-journal
+calorai.db
