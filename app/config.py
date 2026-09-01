@@ -25,11 +25,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Together, a local vLLM, Gemini's compat layer) works by changing this alone.
 DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Free-tier OpenRouter IDs. These rotate and get rate-limited without notice —
+# Free-tier OpenRouter IDs, present on the provider's model list as of
+# 2026-09-01. Free-tier IDs rotate and get rate-limited without notice, so
 # always run `python scripts/check_models.py` before relying on them.
-DEFAULT_TEXT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
-DEFAULT_VISION_MODEL = "qwen/qwen2.5-vl-72b-instruct:free"
-DEFAULT_EXTRACTOR_MODEL = "mistralai/mistral-small-3.1-24b-instruct:free"
+DEFAULT_TEXT_MODEL = "z-ai/glm-5.2:free"            # tool calling
+DEFAULT_VISION_MODEL = "google/gemma-4-31b-it:free"  # multimodal, structured output
+DEFAULT_EXTRACTOR_MODEL = "liquid/lfm-2.5-2.6b:free" # tiny + fast, off critical path
 
 # SQLite so a clean clone runs with zero setup; swap for
 # postgresql+asyncpg://user:pass@host/db to use hosted Postgres.
