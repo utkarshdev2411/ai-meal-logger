@@ -23,14 +23,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # OpenRouter, OpenAI-compatible. Any other OpenAI-compatible endpoint (Groq,
 # Together, a local vLLM, Gemini's compat layer) works by changing this alone.
-DEFAULT_LLM_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 # Free-tier OpenRouter IDs, present on the provider's model list as of
 # 2026-09-01. Free-tier IDs rotate and get rate-limited without notice, so
 # always run `python scripts/check_models.py` before relying on them.
-DEFAULT_TEXT_MODEL = "z-ai/glm-5.2:free"            # tool calling
-DEFAULT_VISION_MODEL = "google/gemma-4-31b-it:free"  # multimodal, structured output
-DEFAULT_EXTRACTOR_MODEL = "liquid/lfm-2.5-2.6b:free" # tiny + fast, off critical path
+DEFAULT_TEXT_MODEL = "gemini-2.5-flash"
+DEFAULT_VISION_MODEL = "gemini-2.5-pro"
+DEFAULT_EXTRACTOR_MODEL = "gemini-2.5-flash-lite"
 
 # SQLite so a clean clone runs with zero setup; swap for
 # postgresql+asyncpg://user:pass@host/db to use hosted Postgres.
