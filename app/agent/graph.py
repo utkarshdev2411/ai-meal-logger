@@ -35,6 +35,7 @@ def build_llm() -> BaseChatModel:
         base_url=settings.llm_base_url,
         api_key=settings.require_api_key(),
         max_tokens=settings.reply_max_tokens,
+        model_kwargs={"reasoning_effort": "none"} if settings.text_model.startswith("gemini") else {},
     )
 
 def build_graph(

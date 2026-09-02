@@ -71,11 +71,11 @@ async def _ping(
 ) -> Check:
     """One chat-completions round trip, timed, never raising."""
     started = time.perf_counter()
+    payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    if model.startswith("gemini") and role == "text":
+        payload["reasoning_effort"] = "none"
     try:
-        response = await client.post(
-            "/chat/completions",
-            json={"model": model, "messages": messages, "max_tokens": max_tokens},
-        )
+        response = await client.post("/chat/completions", json=payload)
     except Exception as exc:  # network, timeout, DNS — all just "fail"
         elapsed = (time.perf_counter() - started) * 1000
         return Check(role, model, False, elapsed, f"{type(exc).__name__}: {exc}")
