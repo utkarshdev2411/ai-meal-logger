@@ -1,4 +1,4 @@
-import asyncio
+import json
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -47,8 +47,8 @@ def build_graph(
     llm_with_tools = (llm or build_llm()).bind_tools(tools)
 
     async def prefetch_node(state: AgentState) -> dict:
-        data = await prefetch(session, user_id)
-        return {"prefetch_data": data}
+        data = await prefetch(user_id)
+        return {"prefetch_block": render_prefetch_block(data)}
 
     async def vision_node(state: AgentState) -> dict:
         image_id = state.get("image_id")
@@ -58,16 +58,17 @@ def build_graph(
         return {"vision_observation": None}
 
     async def agent_node(state: AgentState) -> dict:
-        prefetch_data = state.get("prefetch_data")
         vision_obs = state.get("vision_observation")
-        
-        prefetch_block = render_prefetch_block(prefetch_data) if prefetch_data else ""
-        sys_prompt = build_system_prompt(prefetch_block)
-        
-        if vision_obs:
-            import json
-            obs_str = json.dumps(vision_obs, indent=2)
-            sys_prompt += f"\n\nVISION_OBSERVATION:\n{obs_str}"
+        sys_prompt = build_system_prompt(state.get("prefetch_block") or "")
+
+        if isinstance(vision_obs, dict) and vision_obs.get("error"):
+            # Degrade in words, not by pasting an error payload in as an observation.
+            sys_prompt += (
+                "\n\nVISION_NOTE: the photo could not be read. Ask the user to "
+                "describe the plate instead; do not guess its contents."
+            )
+        elif vision_obs:
+            sys_prompt += f"\n\nVISION_OBSERVATION:\n{json.dumps(vision_obs, indent=2)}"
 
         history = _trim_history(state["messages"], settings.history_turns)
         prompt = [SystemMessage(content=sys_prompt), *history]

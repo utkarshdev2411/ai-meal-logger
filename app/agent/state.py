@@ -24,4 +24,6 @@ class AgentState(TypedDict, total=False):
     pending_clarification: str | None
     image_id: str | None
     vision_observation: Any | None
-    prefetch_data: Any | None
+    # Rendered string, not the Prefetch dataclass: graph state is checkpointed
+    # via msgpack, which can't serialize ORM rows.
+    prefetch_block: str | None

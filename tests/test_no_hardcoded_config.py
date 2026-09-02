@@ -14,7 +14,15 @@ from pathlib import Path
 import pytest
 
 # The only file permitted to contain these literals.
-ALLOWED = {"app/config.py"}
+# scripts/verify_*.py point DATABASE_URL at a throwaway scratch DB before
+# importing the app — that's the scratch fixture, not config sprawl in app code.
+ALLOWED = {
+    "app/config.py",
+    "scripts/verify_db.py",
+    "scripts/verify_agent.py",
+    "scripts/verify_memory.py",
+    "scripts/verify_nutrition.py",
+}
 
 SCANNED_TREES = ("app", "scripts")
 

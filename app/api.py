@@ -201,7 +201,7 @@ async def get_meals(
                 {
                     "id": item.id,
                     "name": item.name,
-                    "qty": item.qty,
+                    "quantity": item.quantity,
                     "unit": item.unit,
                     "kcal": item.kcal,
                     "protein_g": item.protein_g,

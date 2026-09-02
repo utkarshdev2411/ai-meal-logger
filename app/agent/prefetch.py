@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from app.db import repo
+from app.db.client import async_session_factory
 from app.db.models import Meal
 from app.mealops.logging_ops import TotalsResult, get_totals
 from app.memory.store import render_memory_block, retrieve_memories
@@ -25,19 +26,34 @@ class Prefetch:
     recent_meals: list[Meal]
 
 
-async def prefetch(session: Any, user_id: str, today: date | None = None) -> Prefetch:
+async def prefetch(
+    user_id: str,
+    today: date | None = None,
+    session_factory: Any = None,
+) -> Prefetch:
     """Fetch memories, today's totals, and a recent-meal digest concurrently.
 
     A single `asyncio.gather` — not three sequential awaits — is the whole
     latency win this buys (CONTEXT.md §8.2's ~450-token / 1-2s-round-trip
     trade), so this shape must not regress back to sequential awaits.
+
+    Each fetch gets its OWN session: an AsyncSession is not safe for
+    concurrent use, and `retrieve_memories` writes (use_count/last_used_at),
+    so sharing one session here raises IllegalStateChangeError rather than
+    running in parallel.
     """
     today = today or date.today()
     since = today - timedelta(days=_DIGEST_DAYS)
+    factory = session_factory or async_session_factory
+
+    async def _in_session(fn):
+        async with factory() as s:
+            return await fn(s)
+
     memories, totals, recent = await asyncio.gather(
-        retrieve_memories(session, user_id),
-        get_totals(session, user_id, day=today),
-        repo.recent_meals(session, user_id, since_date=since),
+        _in_session(lambda s: retrieve_memories(s, user_id)),
+        _in_session(lambda s: get_totals(s, user_id, day=today)),
+        _in_session(lambda s: repo.recent_meals(s, user_id, since_date=since)),
     )
     return Prefetch(memories=memories, totals=totals, recent_meals=recent[:_DIGEST_MAX_MEALS])
 
