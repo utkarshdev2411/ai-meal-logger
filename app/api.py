@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from app.db.models import Image
 from app.memory.extractor import extract_and_write
 from app.vision.downscale import downscale_image
 from app.vision.process import process_image_by_id
+from app.telemetry import TurnTimer, consume_cold, flush, new_turn_id
 
 DEMO_USER = "demo"
 _checkpointer = MemorySaver()
@@ -115,8 +117,19 @@ async def chat(
         config = {"configurable": {"thread_id": f"{user_id}:{thread_id}"}}
         full_reply = ""
 
+        settings = get_settings()
+        timer = TurnTimer(
+            turn_id=new_turn_id(),
+            path="image" if image_id else "text",
+            user_id=user_id,
+            fast_path=settings.fast_path,
+            cold=consume_cold(),
+        )
+        start = time.perf_counter()
+        ttft_recorded = False
+
         async with async_session_factory() as session:
-            graph = build_graph(session, user_id, _checkpointer)
+            graph = build_graph(session, user_id, _checkpointer, timer=timer)
 
             async for event in graph.astream_events(state_update, config=config, version="v2"):
                 kind = event.get("event")
@@ -127,6 +140,9 @@ async def chat(
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         token = chunk.content if isinstance(chunk.content, str) else ""
                         if token:
+                            if not ttft_recorded:
+                                timer.record("ttft", int((time.perf_counter() - start) * 1000))
+                                ttft_recorded = True
                             full_reply += token
                             yield {"event": "token", "data": json.dumps({"token": token})}
 
@@ -141,10 +157,16 @@ async def chat(
                                 "data": json.dumps(output),
                             }
 
+            total_ms = int((time.perf_counter() - start) * 1000)
+            if not ttft_recorded:
+                timer.record("ttft", total_ms)
+            timer.record("total", total_ms)
+
             yield {"event": "done", "data": json.dumps({"reply": full_reply})}
 
         # fire-and-forget memory extraction
         asyncio.create_task(_extract(user_id, text, full_reply))
+        asyncio.create_task(flush())
 
     return EventSourceResponse(event_stream())
 

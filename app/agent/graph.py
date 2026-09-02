@@ -15,6 +15,7 @@ from app.agent.tools import build_tools
 from app.config import get_settings
 from app.agent.prefetch import prefetch, render_prefetch_block
 from app.vision.process import process_image_by_id
+from app.telemetry import TurnTimer
 
 def _trim_history(messages: list[BaseMessage], history_turns: int) -> list[BaseMessage]:
     human_seen = 0
@@ -41,21 +42,32 @@ def build_graph(
     user_id: str,
     checkpointer: BaseCheckpointSaver,
     llm: BaseChatModel | None = None,
+    timer: TurnTimer | None = None,
 ) -> CompiledStateGraph:
     settings = get_settings()
     tools = build_tools(session, user_id)
     llm_with_tools = (llm or build_llm()).bind_tools(tools)
+    tool_node = ToolNode(tools)
+    llm_calls = {"count": 0}
 
     async def prefetch_node(state: AgentState) -> dict:
-        data = await prefetch(user_id)
+        if timer:
+            async with timer.phase("prefetch"):
+                data = await prefetch(user_id)
+        else:
+            data = await prefetch(user_id)
         return {"prefetch_block": render_prefetch_block(data)}
 
     async def vision_node(state: AgentState) -> dict:
         image_id = state.get("image_id")
-        if image_id:
+        if not image_id:
+            return {"vision_observation": None}
+        if timer:
+            async with timer.phase("vision"):
+                obs = await process_image_by_id(session, image_id)
+        else:
             obs = await process_image_by_id(session, image_id)
-            return {"vision_observation": obs}
-        return {"vision_observation": None}
+        return {"vision_observation": obs}
 
     async def agent_node(state: AgentState) -> dict:
         vision_obs = state.get("vision_observation")
@@ -72,21 +84,34 @@ def build_graph(
 
         history = _trim_history(state["messages"], settings.history_turns)
         prompt = [SystemMessage(content=sys_prompt), *history]
-        response = await llm_with_tools.ainvoke(prompt)
+
+        llm_calls["count"] += 1
+        phase_name = "llm_1" if llm_calls["count"] == 1 else "llm_2"
+        if timer:
+            async with timer.phase(phase_name):
+                response = await llm_with_tools.ainvoke(prompt)
+        else:
+            response = await llm_with_tools.ainvoke(prompt)
         return {"messages": [response]}
 
+    async def tools_node(state: AgentState) -> dict:
+        if timer:
+            async with timer.phase("tool"):
+                return await tool_node.ainvoke(state)
+        return await tool_node.ainvoke(state)
+
     graph = StateGraph(AgentState)
-    
+
     # We use a dummy start node to branch out
     async def start_node(state: AgentState) -> dict:
         return {}
-        
+
     graph.add_node("start", start_node)
     graph.add_node("prefetch", prefetch_node)
     graph.add_node("vision", vision_node)
     graph.add_node("agent", agent_node)
-    graph.add_node("tools", ToolNode(tools))
-    
+    graph.add_node("tools", tools_node)
+
     graph.set_entry_point("start")
     
     # Conditional routing from start to allow parallel execution if image exists

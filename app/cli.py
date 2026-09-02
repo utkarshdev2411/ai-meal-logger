@@ -23,9 +23,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.agent.graph import build_graph
+from app.config import get_settings
 from app.db import repo
 from app.db.client import async_session_factory, create_all
 from app.memory.extractor import extract_and_write
+from app.telemetry import TurnTimer, consume_cold, flush, new_turn_id
+import time
 
 DEMO_EXTERNAL_ID = "demo"
 THREAD_ID = "cli"
@@ -38,19 +41,34 @@ from app.db.models import Image
 from app.vision.downscale import downscale_image
 
 async def run_turn(checkpointer: MemorySaver, user_id: str, text: str, image_id: str | None = None) -> str:
+    settings = get_settings()
+    timer = TurnTimer(
+        turn_id=new_turn_id(),
+        path="image" if image_id else "text",
+        user_id=user_id,
+        fast_path=settings.fast_path,
+        cold=consume_cold(),
+    )
+    start = time.perf_counter()
     async with async_session_factory() as session:
-        graph = build_graph(session, user_id, checkpointer)
+        graph = build_graph(session, user_id, checkpointer, timer=timer)
         config = {"configurable": {"thread_id": THREAD_ID}}
         state_update = {"messages": [HumanMessage(content=text)], "user_id": user_id}
         if image_id:
             state_update["image_id"] = image_id
-            
+
         result = await graph.ainvoke(state_update, config=config)
-        
+
+        reply = "(no reply)"
         for msg in reversed(result["messages"]):
             if isinstance(msg, AIMessage) and msg.content:
-                return msg.content if isinstance(msg.content, str) else str(msg.content)
-        return "(no reply)"
+                reply = msg.content if isinstance(msg.content, str) else str(msg.content)
+                break
+
+    total_ms = int((time.perf_counter() - start) * 1000)
+    timer.record("total", total_ms)
+    timer.record("ttft", total_ms)
+    return reply
 
 
 async def _run_extraction(user_id: str, text: str, reply: str) -> None:
@@ -125,6 +143,7 @@ async def main() -> None:
 
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
+    await flush()
 
 if __name__ == "__main__":
     asyncio.run(main())
