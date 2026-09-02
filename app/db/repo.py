@@ -254,3 +254,13 @@ async def insert_latency_sample(
     session.add(sample)
     await session.commit()
     return sample
+
+
+async def get_latency_samples(
+    session: AsyncSession, turn_ids: list[str] | None = None
+) -> list[LatencySample]:
+    stmt = select(LatencySample)
+    if turn_ids is not None:
+        stmt = stmt.where(LatencySample.turn_id.in_(turn_ids))
+    result = await session.execute(stmt)
+    return list(result.scalars().all())

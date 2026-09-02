@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     history_turns: int = 6
     image_max_edge: int = 768
     fast_path: bool = False
+    bench_default_runs: int = 15
 
     # --- tracing (optional) ----------------------------------------------
     langsmith_tracing: bool = False
