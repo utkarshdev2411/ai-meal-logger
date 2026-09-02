@@ -22,6 +22,7 @@ ALLOWED = {
     "scripts/verify_agent.py",
     "scripts/verify_memory.py",
     "scripts/verify_nutrition.py",
+    "scripts/verify_vision.py",
 }
 
 SCANNED_TREES = ("app", "scripts")
