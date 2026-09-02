@@ -31,16 +31,22 @@ DEMO_EXTERNAL_ID = "demo"
 THREAD_ID = "cli"
 
 
-async def run_turn(checkpointer: MemorySaver, user_id: str, text: str) -> str:
+import mimetypes
+import uuid
+from datetime import datetime, timezone
+from app.db.models import Image
+from app.vision.downscale import downscale_image
+
+async def run_turn(checkpointer: MemorySaver, user_id: str, text: str, image_id: str | None = None) -> str:
     async with async_session_factory() as session:
         graph = build_graph(session, user_id, checkpointer)
         config = {"configurable": {"thread_id": THREAD_ID}}
-        # last_meal_id intentionally omitted here: it's a checkpointed channel
-        # written by tool Commands, and re-sending it each turn would reset it.
-        result = await graph.ainvoke(
-            {"messages": [HumanMessage(content=text)], "user_id": user_id},
-            config=config,
-        )
+        state_update = {"messages": [HumanMessage(content=text)], "user_id": user_id}
+        if image_id:
+            state_update["image_id"] = image_id
+            
+        result = await graph.ainvoke(state_update, config=config)
+        
         for msg in reversed(result["messages"]):
             if isinstance(msg, AIMessage) and msg.content:
                 return msg.content if isinstance(msg.content, str) else str(msg.content)
@@ -56,26 +62,61 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="CalorAI text-path CLI")
     parser.add_argument("--image", help="path to an image")
     args = parser.parse_args()
-    if args.image:
-        print(f"image support not wired yet ({args.image} ignored) — text only this phase.")
 
     await create_all()
     checkpointer = MemorySaver()
     async with async_session_factory() as session:
         user = await repo.get_or_create_user(session, DEMO_EXTERNAL_ID)
-    user_id = user.id
+        user_id = user.id
+        
+        image_id = None
+        if args.image:
+            # Simulate upload and downscale
+            with open(args.image, "rb") as f:
+                raw_bytes = f.read()
+            from app.config import get_settings
+            max_edge = get_settings().image_max_edge
+            down_bytes, w, h, mime = downscale_image(raw_bytes, max_edge)
+            
+            image_id = str(uuid.uuid4())
+            # For CLI we can write down_bytes to a tmp file
+            import tempfile
+            tmp_path = tempfile.mktemp(suffix=".jpg")
+            with open(tmp_path, "wb") as f:
+                f.write(down_bytes)
+                
+            img_row = Image(
+                id=image_id,
+                user_id=user_id,
+                path=tmp_path,
+                mime=mime,
+                width=w,
+                height=h,
+                bytes=len(down_bytes),
+                status="pending",
+                created_at=datetime.now(timezone.utc)
+            )
+            session.add(img_row)
+            await session.commit()
+            print(f"Image pre-processed and staged with ID: {image_id}")
 
     background_tasks: set[asyncio.Task] = set()
     print("CalorAI — type a message (Ctrl-D to quit)")
+    
+    first_turn = True
     while True:
         try:
             text = input("you> ").strip()
         except EOFError:
             print()
             break
-        if not text:
+        if not text and not (first_turn and image_id):
             continue
-        reply = await run_turn(checkpointer, user_id, text)
+            
+        turn_image_id = image_id if first_turn else None
+        first_turn = False
+        
+        reply = await run_turn(checkpointer, user_id, text, turn_image_id)
         print(f"bot> {reply}")
 
         task = asyncio.create_task(_run_extraction(user_id, text, reply))
@@ -84,7 +125,6 @@ async def main() -> None:
 
     if background_tasks:
         await asyncio.gather(*background_tasks, return_exceptions=True)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

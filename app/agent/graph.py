@@ -1,25 +1,4 @@
-"""LangGraph text-path agent core (FR-4.1, FR-4.4-FR-4.7).
-
-Graph shape follows CONTEXT.md §5's diagram, sized to what exists this phase:
-`load_session` -> `agent` (tool loop) -> respond. The full `asyncio.gather`
-prefetch node (memories + totals + meal digest, run in parallel with vision)
-is Phase 6's job; this phase only wires memory in, as a synchronous
-`retrieve_memories` call at the top of `agent_node`. `vision_extract` isn't
-built yet either (Phase 7), so `load_session` (done in `app/cli.py` before the
-graph even runs — opening the session and resolving `user_id`) feeds straight
-into `agent`. Adding those nodes later is wiring a parallel branch in front of
-`agent`, not a rewrite — the seam is deliberate.
-
-Session/user_id binding: tools need a live DB session and a user_id, but a
-compiled LangGraph graph is normally built once and reused. Here `build_graph`
-is called fresh per turn (see `app/cli.py`), closing the tools over that
-turn's `(session, user_id)` — simple, correct, and cheap enough at this scale;
-the checkpointer (passed in, not rebuilt) is what actually persists state
-across turns, not the graph object.
-"""
-
-from __future__ import annotations
-
+import asyncio
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -34,15 +13,10 @@ from app.agent.prompts import build_system_prompt
 from app.agent.state import AgentState
 from app.agent.tools import build_tools
 from app.config import get_settings
-from app.memory.store import render_memory_block, retrieve_memories
-
+from app.agent.prefetch import prefetch, render_prefetch_block
+from app.vision.process import process_image_by_id
 
 def _trim_history(messages: list[BaseMessage], history_turns: int) -> list[BaseMessage]:
-    """Keep only the last `history_turns` user turns (FR-4.7).
-
-    Cuts only at HumanMessage boundaries so a tool-call/tool-response pair is
-    never split apart — a HumanMessage never sits inside one of those.
-    """
     human_seen = 0
     cut = 0
     for i in range(len(messages) - 1, -1, -1):
@@ -53,7 +27,6 @@ def _trim_history(messages: list[BaseMessage], history_turns: int) -> list[BaseM
                 break
     return messages[cut:]
 
-
 def build_llm() -> BaseChatModel:
     settings = get_settings()
     return ChatOpenAI(
@@ -63,38 +36,69 @@ def build_llm() -> BaseChatModel:
         max_tokens=settings.reply_max_tokens,
     )
 
-
 def build_graph(
     session: Any,
     user_id: str,
     checkpointer: BaseCheckpointSaver,
     llm: BaseChatModel | None = None,
 ) -> CompiledStateGraph:
-    """Compile a fresh graph bound to this turn's session/user_id.
-
-    `llm` is overridable so tests/verify scripts can swap in a scripted fake
-    without touching provider config.
-    """
     settings = get_settings()
     tools = build_tools(session, user_id)
     llm_with_tools = (llm or build_llm()).bind_tools(tools)
 
+    async def prefetch_node(state: AgentState) -> dict:
+        data = await prefetch(session, user_id)
+        return {"prefetch_data": data}
+
+    async def vision_node(state: AgentState) -> dict:
+        image_id = state.get("image_id")
+        if image_id:
+            obs = await process_image_by_id(session, image_id)
+            return {"vision_observation": obs}
+        return {"vision_observation": None}
+
     async def agent_node(state: AgentState) -> dict:
-        # Synchronous retrieve-then-prompt, once per graph invocation. Real
-        # (not stubbed) memory-in-context, just not yet fanned out in
-        # parallel with vision — that's Phase 6's `asyncio.gather` prefetch
-        # node, which will move this call rather than replace it.
-        memories = await retrieve_memories(session, user_id)
-        system_prompt = build_system_prompt(render_memory_block(memories))
+        prefetch_data = state.get("prefetch_data")
+        vision_obs = state.get("vision_observation")
+        
+        prefetch_block = render_prefetch_block(prefetch_data) if prefetch_data else ""
+        sys_prompt = build_system_prompt(prefetch_block)
+        
+        if vision_obs:
+            import json
+            obs_str = json.dumps(vision_obs, indent=2)
+            sys_prompt += f"\n\nVISION_OBSERVATION:\n{obs_str}"
+
         history = _trim_history(state["messages"], settings.history_turns)
-        prompt = [SystemMessage(content=system_prompt), *history]
+        prompt = [SystemMessage(content=sys_prompt), *history]
         response = await llm_with_tools.ainvoke(prompt)
         return {"messages": [response]}
 
     graph = StateGraph(AgentState)
+    
+    # We use a dummy start node to branch out
+    async def start_node(state: AgentState) -> dict:
+        return {}
+        
+    graph.add_node("start", start_node)
+    graph.add_node("prefetch", prefetch_node)
+    graph.add_node("vision", vision_node)
     graph.add_node("agent", agent_node)
     graph.add_node("tools", ToolNode(tools))
-    graph.set_entry_point("agent")
+    
+    graph.set_entry_point("start")
+    
+    # Conditional routing from start to allow parallel execution if image exists
+    def route_start(state: AgentState) -> list[str]:
+        if state.get("image_id"):
+            return ["prefetch", "vision"]
+        return ["prefetch"]
+        
+    graph.add_conditional_edges("start", route_start, ["prefetch", "vision"])
+    
+    graph.add_edge("prefetch", "agent")
+    graph.add_edge("vision", "agent")
+    
     graph.add_conditional_edges("agent", tools_condition, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")
 

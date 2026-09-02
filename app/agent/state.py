@@ -22,3 +22,6 @@ class AgentState(TypedDict, total=False):
     user_id: str
     last_meal_id: str | None
     pending_clarification: str | None
+    image_id: str | None
+    vision_observation: Any | None
+    prefetch_data: Any | None
