@@ -1,0 +1,367 @@
+- id: m01_log_breakfast
+  turns:
+    - user: "had 2 parathas and chai for breakfast"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: paratha, quantity: 2, unit: piece}
+              - {name: chai, quantity: 1, unit: cup}
+            meal_slot: breakfast
+        - reply: "Logged 2 parathas and chai for breakfast — about 312 kcal. Say the word if that's off."
+  expect:
+    tool_calls: [log_meal]
+    forbidden_tools: [revise_meal, remember, recall, search_meals]
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: paratha, quantity: 2}
+      - {name: chai, quantity: 1}
+
+- id: m02_leftover_biryani
+  turns:
+    - user: "leftover biryani, maybe two thirds of the box"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: biryani, quantity: 0.67, unit: bowl}
+            meal_slot: lunch
+        - reply: "Logged ~2/3 of the box as one bowl-ish portion of biryani for lunch."
+  expect:
+    tool_calls: [log_meal]
+    forbidden_tools: [revise_meal]
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: biryani, quantity: 0.67}
+
+- id: m03_grazed_afternoon_ambiguous
+  turns:
+    - user: "skipped lunch but grazed all afternoon"
+      llm:
+        - reply: "Got it, lunch skipped. For the grazing — roughly what was it: biscuits, nuts, fruit?"
+  expect:
+    tool_calls: []
+    forbidden_tools: [log_meal, revise_meal, remember]
+  expect_db:
+    meal_count: 0
+
+- id: m04_same_as_yesterday
+  setup:
+    meals:
+      - items:
+          - {name: poha, quantity: 1, unit: bowl}
+        meal_slot: breakfast
+        days_ago: 1
+  turns:
+    - user: "same as yesterday"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: poha, quantity: 1, unit: bowl}
+            meal_slot: breakfast
+        - reply: "Logged the same poha breakfast as yesterday."
+  expect:
+    tool_calls: [log_meal]
+    forbidden_tools: [search_meals, recall]
+  expect_db:
+    meal_count: 2
+    totals_items:
+      - {name: poha, quantity: 1}
+
+- id: m05_correction_not_double
+  turns:
+    - user: "had 2 rotis for breakfast"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: roti, quantity: 2, unit: piece}
+            meal_slot: breakfast
+        - reply: "Logged 2 rotis for breakfast."
+    - user: "actually that was 3 rotis not 2"
+      llm:
+        - tool: revise_meal
+          args:
+            action: set_item_qty
+            meal_ref: last
+            item_id: "$item:roti"
+            quantity: 3
+        - reply: "Updated to 3 rotis — corrected, not doubled."
+  expect:
+    tool_calls: [log_meal, revise_meal]
+    forbidden_tools: []
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: roti, quantity: 3}
+    last_meal_items:
+      - {name: roti, quantity: 3}
+
+- id: m06_protein_query
+  setup:
+    meals:
+      - items:
+          - {name: paratha, quantity: 2, unit: piece}
+          - {name: chai, quantity: 1, unit: cup}
+        meal_slot: breakfast
+        days_ago: 0
+  turns:
+    - user: "how much protein have I had today?"
+      llm:
+        - reply: "You've had about 8g of protein today."
+  expect:
+    tool_calls: []
+    forbidden_tools: [get_daily_totals, search_meals, log_meal]
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: paratha, quantity: 2}
+      - {name: chai, quantity: 1}
+
+- id: m07_calories_query
+  setup:
+    meals:
+      - items:
+          - {name: paratha, quantity: 2, unit: piece}
+          - {name: chai, quantity: 1, unit: cup}
+        meal_slot: breakfast
+        days_ago: 0
+  turns:
+    - user: "how am I doing on calories?"
+      llm:
+        - reply: "You're at about 312 kcal today."
+  expect:
+    tool_calls: []
+    forbidden_tools: [get_daily_totals, log_meal]
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: paratha, quantity: 2}
+      - {name: chai, quantity: 1}
+
+- id: m08_photo_alone
+  setup:
+    images:
+      - key: plate1
+        status: ready
+        observation:
+          items:
+            - {name: dal, portion_estimate: "1 bowl", confidence: 0.9, alternatives: []}
+            - {name: rice, portion_estimate: "1 cup", confidence: 0.85, alternatives: []}
+          plate_context: thali
+          overall_confidence: 0.87
+          unclear: []
+  turns:
+    - user: ""
+      image: plate1
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: dal, quantity: 1, unit: bowl}
+              - {name: rice, quantity: 1, unit: bowl}
+            meal_slot: lunch
+        - reply: "Logged dal and rice from the photo."
+  expect:
+    tool_calls: [log_meal]
+    forbidden_tools: []
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: dal, quantity: 1}
+      - {name: rice, quantity: 1}
+
+- id: m09_photo_with_caption_merge
+  setup:
+    images:
+      - key: plate1
+        status: ready
+        observation:
+          items:
+            - {name: dal, portion_estimate: "1 bowl", confidence: 0.9, alternatives: []}
+            - {name: rice, portion_estimate: "1 cup", confidence: 0.85, alternatives: []}
+          plate_context: thali
+          overall_confidence: 0.87
+          unclear: []
+  turns:
+    - user: "half of this was my brother's"
+      image: plate1
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: dal, quantity: 0.5, unit: bowl}
+              - {name: rice, quantity: 0.5, unit: bowl}
+            meal_slot: dinner
+        - reply: "Logged half a thali — dal and rice."
+  expect:
+    tool_calls: [log_meal]
+    forbidden_tools: []
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: dal, quantity: 0.5}
+      - {name: rice, quantity: 0.5}
+
+- id: m10_my_usual
+  setup:
+    memories:
+      - kind: routine
+        key: usual_breakfast
+        confidence: 1.0
+        value:
+          label: "usual breakfast"
+          items:
+            - {name: paratha, quantity: 2, unit: piece}
+            - {name: chai, quantity: 1, unit: cup}
+  turns:
+    - user: "my usual"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: paratha, quantity: 2, unit: piece}
+              - {name: chai, quantity: 1, unit: cup}
+            meal_slot: breakfast
+        - reply: "Logged your usual — 2 parathas and chai."
+  expect:
+    tool_calls: [log_meal]
+    forbidden_tools: [recall, search_meals]
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: paratha, quantity: 2}
+      - {name: chai, quantity: 1}
+
+- id: m11_vegetarian_fact
+  turns:
+    - user: "i'm vegetarian btw"
+      llm:
+        - tool: remember
+          args: {kind: diet, key: diet, value: vegetarian}
+        - reply: "Got it — noted you're vegetarian."
+  expect:
+    tool_calls: [remember]
+    forbidden_tools: [log_meal, revise_meal]
+  expect_db:
+    meal_count: 0
+    memories:
+      - {kind: diet, key: diet, status: active, value_contains: vegetarian}
+
+- id: regression_no_double_count_two_corrections
+  turns:
+    - user: "had 2 rotis for breakfast"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: roti, quantity: 2, unit: piece}
+            meal_slot: breakfast
+        - reply: "Logged 2 rotis for breakfast."
+    - user: "actually that was 3 rotis not 2"
+      llm:
+        - tool: revise_meal
+          args:
+            action: set_item_qty
+            meal_ref: last
+            item_id: "$item:roti"
+            quantity: 3
+        - reply: "Updated to 3 rotis."
+    - user: "wait, make it 1 roti"
+      llm:
+        - tool: revise_meal
+          args:
+            action: set_item_qty
+            meal_ref: last
+            item_id: "$item:roti"
+            quantity: 1
+        - reply: "Updated to 1 roti."
+  expect:
+    tool_calls: [log_meal, revise_meal, revise_meal]
+    forbidden_tools: []
+  expect_db:
+    meal_count: 1
+    totals_items:
+      - {name: roti, quantity: 1}
+    last_meal_items:
+      - {name: roti, quantity: 1}
+
+- id: regression_photo_caption_one_meal
+  setup:
+    images:
+      - key: plate1
+        status: ready
+        observation:
+          items:
+            - {name: dal, portion_estimate: "1 bowl", confidence: 0.9, alternatives: []}
+            - {name: rice, portion_estimate: "1 cup", confidence: 0.85, alternatives: []}
+          plate_context: thali
+          overall_confidence: 0.87
+          unclear: []
+  turns:
+    - user: "half of this was my brother's"
+      image: plate1
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: dal, quantity: 0.5, unit: bowl}
+              - {name: rice, quantity: 0.5, unit: bowl}
+            meal_slot: dinner
+        - reply: "Logged half a thali — dal and rice."
+  expect:
+    tool_calls: [log_meal]
+    forbidden_tools: []
+  expect_db:
+    meal_count: 1
+    total_item_count: 2
+    totals_items:
+      - {name: dal, quantity: 0.5}
+      - {name: rice, quantity: 0.5}
+
+- id: regression_memory_recall_zero_tool_calls
+  setup:
+    meals:
+      - items:
+          - {name: poha, quantity: 1, unit: bowl}
+        meal_slot: breakfast
+        days_ago: 1
+    memories:
+      - kind: routine
+        key: usual_breakfast
+        confidence: 1.0
+        value:
+          label: "usual breakfast"
+          items:
+            - {name: paratha, quantity: 2, unit: piece}
+            - {name: chai, quantity: 1, unit: cup}
+  turns:
+    - user: "same as yesterday"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: poha, quantity: 1, unit: bowl}
+            meal_slot: breakfast
+        - reply: "Logged poha, same as yesterday."
+    - user: "my usual"
+      llm:
+        - tool: log_meal
+          args:
+            items:
+              - {name: paratha, quantity: 2, unit: piece}
+              - {name: chai, quantity: 1, unit: cup}
+            meal_slot: breakfast
+        - reply: "Logged your usual too."
+  expect:
+    tool_calls: [log_meal, log_meal]
+    forbidden_tools: [search_meals, recall]
+  expect_db:
+    meal_count: 3
+    totals_items:
+      - {name: poha, quantity: 1}
+      - {name: paratha, quantity: 2}
+      - {name: chai, quantity: 1}
