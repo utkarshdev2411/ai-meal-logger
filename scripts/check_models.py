@@ -73,7 +73,7 @@ async def _ping(
     started = time.perf_counter()
     payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
     if model.startswith("gemini") and role == "text":
-        payload["reasoning_effort"] = "none"
+        payload["reasoning_effort"] = "minimal"
     try:
         response = await client.post("/chat/completions", json=payload)
     except Exception as exc:  # network, timeout, DNS — all just "fail"

@@ -28,7 +28,7 @@ DEFAULT_LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 # Free-tier OpenRouter IDs, present on the provider's model list as of
 # 2026-09-01. Free-tier IDs rotate and get rate-limited without notice, so
 # always run `python scripts/check_models.py` before relying on them.
-DEFAULT_TEXT_MODEL = "gemini-2.5-flash"
+DEFAULT_TEXT_MODEL = "gemini-3.6-flash"
 DEFAULT_VISION_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_EXTRACTOR_MODEL = "gemini-flash-lite-latest"
 
