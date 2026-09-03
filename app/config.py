@@ -82,6 +82,7 @@ class Settings(BaseSettings):
 
     # --- latency / quality knobs -----------------------------------------
     reply_max_tokens: int = 80
+    llm_max_output_tokens: int = 400
     memory_top_k: int = 8
     memory_token_budget: int = 300
     history_turns: int = 6

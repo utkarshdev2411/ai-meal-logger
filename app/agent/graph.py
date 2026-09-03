@@ -35,13 +35,13 @@ def build_llm() -> BaseChatModel:
         return ChatGoogleGenerativeAI(
             model=settings.text_model,
             google_api_key=next_api_key(),
-            max_output_tokens=settings.reply_max_tokens,
+            max_output_tokens=settings.llm_max_output_tokens,
         )
     return ChatOpenAI(
         model=settings.text_model,
         base_url=settings.llm_base_url,
         api_key=next_api_key(),
-        max_tokens=settings.reply_max_tokens,
+        max_tokens=settings.llm_max_output_tokens,
     )
 
 def build_graph(
