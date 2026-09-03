@@ -25,6 +25,16 @@ from app.telemetry import TurnTimer, consume_cold, flush, new_turn_id
 DEMO_USER = "demo"
 _checkpointer = MemorySaver()
 
+
+def _extract_token(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "") for block in content if isinstance(block, dict)
+        )
+    return ""
+
 app = FastAPI(title="CalorAI")
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -138,7 +148,7 @@ async def chat(
                 if kind == "on_chat_model_stream":
                     chunk = event["data"].get("chunk")
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
-                        token = chunk.content if isinstance(chunk.content, str) else ""
+                        token = _extract_token(chunk.content)
                         if token:
                             if not ttft_recorded:
                                 timer.record("ttft", int((time.perf_counter() - start) * 1000))
