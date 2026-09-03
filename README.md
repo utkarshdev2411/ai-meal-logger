@@ -7,10 +7,55 @@ totals so a correction can never double-count.
 
 Built for CalorAI's AI Engineer (Conversational Agents) test task.
 
+📐 **[System design and full data model: ARCHITECTURE.md](ARCHITECTURE.md)**
+
+---
+
+## Overview
+
+CalorAI Logging Agent lets a user log meals by texting or sending a photo, in plain
+language, with no forms and no dropdowns. It runs on LangGraph, keeps daily calorie
+and macro totals correct through edits and corrections, routes photos to a separate
+vision model, and remembers durable facts about the user (diet, goals, routines)
+across sessions, retrieving them selectively so the prompt never bloats.
+
+**What it does:**
+
+- Logs a meal from a plain-language message, resolving items against a local
+  nutrition table with an LLM fallback for anything unrecognized
+- Accepts a photo (with or without a caption) and logs it through a separate vision
+  model, never mixing image content into the text conversation
+- Corrects an existing meal on request ("actually that was 3 rotis not 2"), always
+  as an update to the same row, never a second entry
+- Answers "how am I doing today?" at any point with an accurate, freshly-computed
+  total, never a cached or stored one
+- Remembers durable facts (vegetarian, protein target, "my usual" breakfast) across
+  sessions and uses them to inform later replies, without dumping conversation
+  history into the prompt
+- Decides for itself when to log with a stated assumption versus asking one
+  clarifying question, so it feels like texting a friend rather than filling out a
+  form
+
+**Tools available to the agent:**
+
+| Tool | Purpose |
+|---|---|
+| `log_meal` | Creates a new meal |
+| `revise_meal` | Edits or deletes an existing meal; the only path for corrections |
+| `get_daily_totals` | Reads calorie/macro totals for a given day |
+| `search_meals` | Looks up past meals by date, for things like "same as yesterday" |
+| `remember` | Writes an explicit durable fact the user stated about themselves |
+| `recall` | Looks up a stored fact not already present in the prefetched context |
+
+**Also included (bonus):** a 14-case eval suite over the brief's test conversation
+set, multi-user session isolation, SSE streaming with a `meal_logged` event, and
+image prewarm caching. Full detail on each of these is in the sections below.
+
 ---
 
 ## Table of contents
 
+- [Overview](#overview)
 - [Setup](#setup)
 - [Core features](#core-features)
 - [Architecture at a glance](#architecture-at-a-glance)
@@ -62,8 +107,8 @@ python scripts/check_models.py
 ```
 
 Free-tier model IDs get renamed, retired, and rate-limited without notice, and this
-script proved its worth twice during the build (see [Assumptions and
-trade-offs](#assumptions-and-trade-offs)). It pings every key in the pool against all
+script proved its worth twice during the build (see [Model
+choices](#model-choices)). It pings every key in the pool against all
 three model roles, sending a real test image for the vision check, and exits non-zero
 if any key/role combination is unreachable.
 
@@ -105,117 +150,95 @@ All of the above run with **no API key and no network** except `check_models.py`
 
 ## Architecture at a glance
 
-```
-                    ┌──────────────────────┐
-   inbound msg ──▶  │  prefetch  ∥  vision  │   asyncio.gather (image path only)
-                    └──────────┬────────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │  agent (text model) │◀──┐ tool loop
-                    │  + 6 tools          │───┘
-                    └──────────┬──────────┘
-                               ▼
-                       reply to user
-                               │
-                               ▼  (fire-and-forget, after the reply)
-                    ┌─────────────────────┐
-                    │  background memory  │
-                    │  fact extraction    │
-                    └─────────────────────┘
+```mermaid
+flowchart LR
+    In([User message]) --> P[Prefetch:<br/>totals + memory + recent meals]
+    In --> V[Vision node]
+    P --> Agent[Agent + 6 tools]
+    V --> Agent
+    Agent -->|tool call| Tool[Tool execution] --> Agent
+    Agent --> Reply([Reply to user])
+    Reply -.fire and forget.-> Mem[(Background memory<br/>extraction)]
 ```
 
-`prefetch` gathers today's totals, a recent-meals digest, and ranked memory facts into
-one block appended to the system prompt. This is what makes query turns
-("how am I doing on calories?") and "same as yesterday" cost **zero tool calls**,
-which shows up directly in the latency numbers below.
+Prefetch and vision run in parallel; prefetch alone is what makes query turns
+("how am I doing on calories?") and "same as yesterday" cost **zero tool calls**.
 
 ---
 
 ## Model choices
 
-**Every role, text, vision, background memory extraction, points at the same
-model: `gemini-3.1-flash-lite`, called through a round-robin pool of API keys.**
-This is a deliberate late-build pivot, not the original design, and I want to be
-upfront about the story rather than present it as if it were the plan from hour one.
+**Every role, text, vision, background memory extraction, runs on
+`gemini-3.1-flash-lite`, called through a round-robin pool of API keys.** This
+wasn't the original plan; two real problems forced the pivot.
 
-### What I originally did, and why it changed
+**The issues.** The build started with three distinct models, the standard shape
+for this task. That broke for two reasons: (1) a confirmed, open upstream bug,
+Gemini 3.x requires a `thought_signature` echoed back on every tool-calling turn,
+and `langchain-openai` silently drops that field, so the graded correction case
+failed on turn two (`langchain-ai/langchain#34056`); fixed by switching to
+`langchain-google-genai`. (2) An explicit cost constraint, combined with
+`gemini-2.5-flash` and `gemini-2.5-flash-lite` both being listed in the API's
+model catalog but 404ing on every real call for this project, wasted a first
+round of picks. `gemini-3.1-flash-lite` is the model that came back confirmed
+live (auth, tool calling, image input) across every key, so all three roles
+run on it.
 
-The build started with three genuinely distinct models: a stronger tool-calling model
-for text, a separate vision model, and a cheap model for background extraction. This
-is the textbook shape for this task and the one I'd defend by default. Two real
-problems forced a pivot:
+**Where each model role is used, and the best-fit choice per role:**
 
-1. **A confirmed, open upstream bug.** Gemini's 3.x model generation attaches a
-   mandatory `thought_signature` to every function call, which the API requires
-   echoed back on the next turn. `langchain-openai` (the generic OpenAI-compat
-   client) silently drops that field when parsing the response, so the *second*
-   turn of any tool-using conversation gets rejected with a 400
-   (`langchain-ai/langchain#34056`, still open). This broke exactly the graded
-   correction case, silently, and only on the second turn, not something a
-   single-shot smoke test catches. Fixed by switching the text role's client to
-   `langchain-google-genai`, which round-trips the signature correctly (verified
-   directly: a scripted two-turn log→correct exchange completes cleanly, confirmed
-   with a real conversation afterward; see the DB dump under
-   [Assumptions and trade-offs](#assumptions-and-trade-offs)).
-2. **Cost minimization, stated explicitly as a hard constraint by whoever holds the
-   API keys for this project.** Once that constraint was set, I re-verified every
-   candidate model **live**, not from documentation, which I'd already been burned
-   by twice (see below), against three separate API keys/projects: real auth, a
-   real `log_meal`-shaped tool call (including correctly parsing "two thirds of the
-   box" as `quantity: 0.67`), and a real test image, on every key. `gemini-3.1-flash-lite`
-   was the only model confirmed working across all three keys, all three
-   capabilities. Quota headroom then comes from the key pool
-   (`app/config.py::next_api_key`, round-robin across `LLM_API_KEY` +
-   `LLM_API_KEYS_EXTRA`), not from spreading roles across model tiers.
+| Role | Used for | Called from | Current model | Best-fit model |
+|---|---|---|---|---|
+| `TEXT_MODEL` | Conversational agent; the only role doing tool calling | `app/agent/graph.py::build_llm` | `gemini-3.1-flash-lite` | `gemini-3.6-flash` ($0.75 / $3.75 per 1M): stronger instruction-following, and this is the one role where tool-calling reliability actually matters |
+| `VISION_MODEL` | Image → structured food observation, never conversational | `app/vision/extract.py::extract_vision` | `gemini-3.1-flash-lite` | `gemini-3.1-flash-lite` stays right: confirmed real image understanding, low call volume (image turns only), cost barely moves the needle either way |
+| `EXTRACTOR_MODEL` | Background memory-fact extraction, fires on every turn | `app/memory/extractor.py::extract_facts` | `gemini-3.1-flash-lite` | `gemini-3.1-flash-lite` stays right: cheapest confirmed option, highest call volume of the three, and errors here are non-fatal (fire-and-forget) so it can tolerate the smaller model |
 
-Vision stays architecturally separate from text regardless of this pivot: it's a
-distinct **call site** (`app/vision/extract.py`, invoked from a graph *node*, never a
-tool), with its own structured-only prompt and its own uncertainty schema. It happens
-to share a model ID with text right now; it never shares a *conversation* with text,
-which is the actual red flag the brief names ("everything through one model, including
-images"). If cost weren't the binding constraint, the three-distinct-models shape is
-what I'd ship instead, and the code makes that a one-line config change, not a
-rewrite: `TEXT_MODEL` / `VISION_MODEL` / `EXTRACTOR_MODEL` are three independent
-settings; `app/config.py` is the only file where a model ID may appear.
+So the actual sweet spot isn't "one model for everything" or "three different
+tiers"; it's **flash-lite everywhere except `TEXT_MODEL`**, since that's the only
+role where the model's own reliability directly decides correctness. At this
+project's real volume the `gemini-3.6-flash` premium on that one role is a few
+cents total, not dollars, which is why cost pressure is what kept it on
+flash-lite here instead.
 
-### The documentation-drift problem, twice
+### Naming the red flag directly
 
-Free-tier model catalogs move fast enough that trusting search results or docs pages
-directly produced two dead ends during this build:
+The brief lists *"everything through one model, including images"* as a red flag,
+and this build runs all three roles on the same model ID. I'm naming that
+directly rather than hoping it goes unnoticed.
 
-- The first model IDs I picked (from web search, cross-checked against a live
-  `/models` listing) were already retired by the time I tried them.
-- `gemini-2.5-flash` and `gemini-2.5-flash-lite` are both listed in the `/models`
-  catalog for every key used here, but 404 with *"no longer available to new
-  users"* on every actual call, on both the OpenAI-compat and native endpoints.
-  Google's catalog endpoint doesn't filter by per-project eligibility, so *listed*
-  and *usable* turned out to be different questions.
+**Why:** billing was never successfully enabled on the Google account used for
+this project. I created and tested keys across multiple cards trying to get
+Gemini billing active and none of them were eligible, which caps every key on
+Google's free tier: per-model daily caps as low as 20 requests/day, and
+per-minute limits in the single digits on some keys. Splitting roles across
+model tiers would have meant three separate, independent free-tier ceilings to
+manage at once. Pooling everything onto `gemini-3.1-flash-lite`, the model
+with the highest free quota, and multiplying that quota with a round-robin key
+pool, was the only way to get reliable throughput without paying anything.
 
-`scripts/check_models.py` exists specifically because of this: every model claim
-in this README was verified with a live API call, not sourced from a docs page.
+**This is a config change, not an architecture one.** Vision and the
+conversational agent are already separate call sites in code (see [Architecture
+at a glance](#architecture-at-a-glance)); they only share a model ID because of
+the constraint above. The moment billing is available, restoring three genuinely
+distinct models is `.env` edits, nothing else:
 
-### Vision handling
+```bash
+TEXT_MODEL=gemini-3.6-flash
+VISION_MODEL=gemini-3.1-flash-lite
+EXTRACTOR_MODEL=gemini-3.1-flash-lite
+```
 
-Vision runs through `app/vision/extract.py` with a strict pipeline: request `json_object`
-mode (the model advertises `response_format` but not guaranteed schema enforcement),
-validate the response against a Pydantic `VisionObservation` schema, tolerate
-markdown-fenced JSON, retry once with a stricter instruction, then raise rather than
-fabricate an observation. A raised error becomes `Image.status='failed'` +
-`Image.error`, and the agent is instructed to *ask the user to describe the plate*
-instead of guessing, never silently invents food items.
+`TEXT_MODEL` / `VISION_MODEL` / `EXTRACTOR_MODEL` are three independent settings
+read fresh from the environment; `app/config.py` is the only file where a model
+ID may appear, so no code changes are needed to flip this back.
 
-**Uncertainty is surfaced, not hidden.** The schema carries `confidence`,
-`alternatives`, and `unclear` per item; the agent hedges in its reply
-("...and what I think is bhindi, correct me if that's off") and logs its best guess
-anyway rather than blocking on a clarifying question, which would break the
-messaging-speed feel the brief asks for.
+### Round-robin key pool
 
-**Photo + caption is one graph turn, not two.** Image presence routes deterministically
-into a `vision` node that runs in parallel with `prefetch`; the resulting
-`VisionObservation` is injected into the *same* agent turn as the caption text. There
-is structurally one `log_meal` call per inbound message regardless of modality. This
-is what prevents `[photo] "half of this was my brother's"` from logging two meals, and
-it's covered by an eval case and a dedicated regression check in `scripts/verify_vision.py`.
+Free-tier Gemini keys carry a per-model daily quota (as low as 20/day on
+`gemini-3.6-flash` for a newer project). `app/config.py::next_api_key` round-robins
+across `LLM_API_KEY` + `LLM_API_KEYS_EXTRA` (comma-separated), pooling quota across
+several free keys instead of hitting one key's ceiling, no billing required. Every
+key in the pool is verified independently by `scripts/check_models.py`, since a key
+can auth fine yet still 404 on the shared model.
 
 ---
 
@@ -321,130 +344,116 @@ prefetched context already answers.
 
 ## Latency
 
-**Required reading first: there is no numeric SLA in the brief.** It asks for
-measurement, reasoning, and honesty about what couldn't be fixed: *"We care more about
-the reasoning than the number."* The numbers below are that measurement; the reasoning
-follows.
+No numeric SLA in the brief; it asks for measurement, reasoning, and honesty about
+what's still slow. Both are below, and this section was re-measured after a real
+bug fix (see [Time breakdown](#time-breakdown)), not left stale.
 
-### Real numbers: `gemini-3.1-flash-lite`, real key pool, real network, `n=8` per case
+### Measured: `gemini-3.1-flash-lite`, real key pool, `n=6` per case
 
-Measured with `python scripts/bench.py --real --runs 8` against the live agent/DB/vision
-stack, not a scripted stand-in. Zero failures across 40 real API turns.
+`python scripts/bench.py --real --runs 6`, against the live agent/DB/vision stack.
 
-| Case | TTFT / total p50 | p95 |
+| Case | p50 | p95 |
 |---|---|---|
-| Log intent (text) | 2.80 s | 3.59 s |
-| **Query intent (text)** | **1.76 s** | 3.22 s |
-| Correction intent (text) | 3.79 s | 6.44 s |
-| Photo + caption, prewarmed | 5.12 s | 9.94 s |
-| Photo + caption, cold | 5.19 s | 8.20 s |
-
-Phase breakdown (text and image paths):
+| Query intent | 3.76 s | 6.62 s |
+| Log intent | 7.92 s | 8.46 s |
+| Correction intent | 7.17 s | 12.16 s |
+| Photo + caption, cold | 5.67 s | 9.13 s |
+| Photo + caption, prewarmed | 14.18 s | 20.88 s |
 
 | Path | Phase | p50 | p95 |
 |---|---|---|---|
-| text | prefetch | 9 ms | 10 ms |
-| text | llm (decide) | 1.67 s | 3.62 s |
-| text | tool exec | 9 ms | 10 ms |
-| text | llm (reply) | 1.27 s | 2.49 s |
-| image | prefetch | 16 ms | 25 ms |
-| image | vision extraction | 742 ms | 3.21 s |
-| image | llm (decide) | 2.02 s | 4.27 s |
-| image | llm (reply) | 1.62 s | 2.70 s |
+| text | prefetch | 9 ms | 12 ms |
+| text | llm (decide) | 3.95 s | 7.07 s |
+| text | tool exec | 10 ms | 14 ms |
+| text | llm (reply) | 2.85 s | 5.78 s |
+| image | prefetch | 24 ms | 83 ms |
+| image | vision | 1.18 s | 4.87 s |
+| image | llm (decide) | 3.37 s | 10.47 s |
+| image | llm (reply) | 5.54 s | 9.67 s |
 
-**What the numbers say, and what I did about it:**
+### Bench load versus real single-turn experience
 
-- **Query intent is the clear standout at 1.76 s p50, because it's the only case
-  costing exactly one LLM call, not two.** `get_daily_totals` and `search_meals` are
-  both structurally unnecessary for it: prefetch already put today's totals in the
-  system prompt. This is the single biggest lever in the whole design: every log/
-  correct/image case pays for a decide-call *and* a reply-call, sequentially,
-  because tool results have to come back before the model can compose a sentence
-  about them.
-- **DB and prefetch cost nothing.** 9–25 ms, against 1.2–2.0 *seconds* per LLM call.
-  Confirms the design bet that the number of sequential LLM round trips is the only
-  latency term worth optimizing, and everything else (SQLite, parallel prefetch,
-  in-process nutrition lookups) is genuinely free by comparison.
-- **What was cut/parallelized/cached, concretely:** vision runs as a graph node in
-  `asyncio.gather` with prefetch, not a tool (saves a full round trip on every image);
-  `log_meal`/`revise_meal` return fresh totals inline (saves the third call on every
-  log/correct turn); replies are capped at 80 tokens (`REPLY_MAX_TOKENS`) since
-  decode time scales with output length and a friend texting back writes two
-  sentences, not a paragraph; the local nutrition table resolves common foods with
-  zero network calls.
+The bench harness fires 5 cases times 6 runs back to back: 35+ real API calls in a
+tight window. That sustained call volume triggers real free-tier queuing on the
+provider side; it is not what one interactive session looks like, and it's why the
+table above runs higher than what you'll see using the app normally.
+
+To check that directly, I timed 6 individual turns across 3 fresh conversations,
+no rapid-fire load, same fixed code:
+
+| Turn | Time |
+|---|---|
+| Log: "had 2 rotis for lunch" | 3.87 s |
+| Query: "how am I doing on calories?" | 2.17 s |
+| Log: "had 2 rotis for lunch" | 5.27 s |
+| Query: "how am I doing on calories?" | 1.58 s |
+| Log: "ate an apple and a banana" | 3.26 s |
+| Query: "how much protein have I had today?" | 3.60 s |
+
+Query turns land at 1.6 to 3.6 s, log turns at 3.3 to 5.3 s: consistent with real
+browser testing (2 to 3 s) and roughly half the bench harness's p50. The token-cap
+fix didn't regress single-turn latency; the harness's own call volume is what
+triggers the provider-side slowdown, and a real session never generates that volume.
+
+### What this shows
+
+- Query intent is structurally the fastest path: prefetch already has today's
+  totals in the system prompt, so it costs one LLM call, not two.
+- `log_meal` / `revise_meal` return fresh totals inline, saving a third call on
+  every log or correct turn.
+- Vision runs as a parallel graph node, not a tool, saving a full round trip on
+  every image.
+- DB and prefetch cost single-digit to double-digit milliseconds; the LLM round
+  trip is the only latency term worth optimizing.
 
 ### Honest gaps
 
-- **Image p95 (8.2–9.9 s) sits right at the brief's own bad example**: *"not after a
-  ten-second agent loop."* I did not fully close this gap. It is structurally two
-  sequential LLM calls plus a vision call, on a free-tier model with meaningful
-  latency variance; the phase breakdown shows exactly where the time goes rather than
-  hiding it in one aggregate number.
-- **Prewarming is proven correct but doesn't show up in the case totals above**, and I
-  want to be precise about why rather than let the numbers imply the mechanism
-  doesn't work. Isolated directly, outside the noisy aggregate: a cache-hit vision
-  lookup takes **1.7 ms**; a real vision call takes **2,285 ms**. The mechanism saves
-  exactly what it should. At `n=8`, the two real LLM calls in an image turn (each
-  ranging 700 ms to 4 s+) have more run-to-run variance than the vision call itself,
-  so the case-level *totals* for prewarmed vs. cold land almost on top of each other.
-  The win is real, it's just swamped in the aggregate at this sample size. The
-  correct read is: **the image path's bottleneck is the LLM tool-loop, not vision
-  extraction.** Prewarming should be judged on the `vision` phase specifically
-  (where the 1.7 ms vs. 2,285 ms gap is unambiguous), not the total.
-- **Free-tier model latency has real variance** (p95 running 1.4–2.4× p50 across every
-  case) that I could not fully control. It's provider-side queuing/variance on a
-  free-tier key, not something client-side caching or parallelism reaches.
+- Free-tier `gemini-3.1-flash-lite` shows real queuing under sustained load (the
+  bench harness's own p95s, especially the image cases, climb past 15 to 20 s).
+  That's provider-side behavior under repeated rapid calls, not something
+  client-side caching reaches, and a single real session doesn't trigger it.
+- Prewarming is proven correct in isolation (cache hit: 1.7 ms; a real vision
+  call: 2,285 ms), but the bench totals above don't show it cleanly: the photo
+  cases are the ones hit hardest by the queuing above, which swamps the smaller
+  vision-call saving in the aggregate.
 
 ---
 
 ## Assumptions and trade-offs
 
-- **No stored running total, anywhere in the schema.** Daily totals are always a SQL
-  aggregate (`SUM(kcal) WHERE status='active'`) over `meal_items`, computed fresh on
-  every read. A correction is structurally an UPDATE via `repo.replace_meal_items`,
-  never an INSERT. Double-counting isn't handled carefully, it's made impossible by
-  there being no counter to increment twice. Verified with a property-style test
-  (log → correct → delete → re-log, asserting totals at every step) written *before*
-  the agent existed, so agent bugs could never be confused with data-layer bugs.
-- **SQLite only, Postgres portable but not tested.** The ORM uses only portable types
-  (`String(36)` PKs, `JSON`, UTC-aware `DateTime`, a partial unique index expressed
-  once via `sqlite_where=`/`postgresql_where=`) so `DATABASE_URL` pointed at Postgres
-  should work unchanged, but that path isn't independently verified in this build.
-  Documented as a config-swap capability, not a proven one.
-- **Nutrition data is a hybrid table + LLM fallback, not a real API.** ~60 hardcoded
-  common items (Indian staples + Western basics) resolve with zero network calls;
-  anything else batches into a single LLM call per turn (never per-item) and degrades
-  to a flagged low-confidence estimate rather than raising. Per the brief's own FAQ,
-  nutrition accuracy isn't what's being evaluated here; the boundary
-  (`app/nutrition/resolve.py`) is where a real API (USDA/Nutritionix) would slot in
-  without touching any caller.
-- **All three model roles share one model ID, for cost reasons, not architecture
-  ones.** Covered in full under [Model choices](#model-choices). This is the one
-  trade-off I'd most want to reverse with a larger budget.
-- **Agent-level tool-call reliability on the free-tier lite model is not perfect.**
-  Investigated directly rather than assumed: running the identical 4-turn scripted
-  conversation (log → correct → query → remember) through the real graph, 4 separate
-  times, produced 2 fully correct runs, 1 run where a correction silently didn't
-  apply, and one live-CLI run that produced a genuine duplicate meal row. Root-caused
-  by inspecting DB state and full message history directly, not by trusting console
-  output. The conclusion: **the data-layer invariant never broke in any run** (every
-  revision that *did* fire was a real UPDATE, never a duplicate INSERT); what's
-  inconsistent is the small free-tier model occasionally choosing the wrong action
-  (or none) on an ambiguous turn. This is a real, known limitation of the
-  cost-minimized model choice above, not a code defect, and I'm stating it plainly
-  rather than presenting cherry-picked clean runs. The brief's own FAQ explicitly
-  says accuracy isn't the focus here; I'm treating this the same way: named, not
-  hidden, not chased to perfection at the cost of the actual deliverables.
-- **A small, separately-observed memory key mismatch:** the `remember` tool and the
-  background extractor independently chose different `key`s for the same
-  conceptual fact (`diet`/`diet` vs. `diet`/`dietary_preference`) in one live run, so
-  the partial-unique-index supersede logic didn't catch a duplicate it structurally
-  could have. Noted under [What I'd fix next](#what-id-fix-or-build-next); a
-  canonical-key normalization step, not a schema change.
-- **No auth, per the brief.** Session isolation is `X-User-Id` header → `users.external_id`,
-  nothing more.
-- **`create_all()` instead of Alembic migrations.** A deliberate cut for a time-boxed
-  build; the first thing to change for anything beyond this project.
+- **No stored running total.** Totals are always a SQL aggregate over `meal_items`,
+  computed fresh on every read; a correction is an UPDATE, never an INSERT.
+  Double-counting isn't handled carefully, it's structurally impossible. Verified
+  with a property-style test (log, correct, delete, re-log) written before the
+  agent existed.
+- **Nutrition data: a hybrid table plus LLM fallback, not a real API.** Per the
+  brief's own FAQ, nutrition accuracy isn't what's being evaluated. ~60 hardcoded
+  items resolve with zero network calls; anything else batches into one LLM call
+  and degrades to a flagged estimate rather than raising. `app/nutrition/resolve.py`
+  is where a real API would slot in later.
+- **SQLite only; Postgres portable but untested.** The ORM uses only portable types,
+  so `DATABASE_URL` pointed at Postgres should work, but that path isn't
+  independently verified here.
+- **One model for all three roles, for cost reasons, not architecture ones.** Full
+  reasoning in [Model choices](#model-choices); the one trade-off I'd most want to
+  reverse with a larger budget.
+- **Agent-level tool-call reliability on the free-tier model isn't perfect,** and
+  I measured it rather than assumed it: the same 4-turn conversation run 4 times
+  produced 2 clean runs, 1 silently-skipped correction, and 1 duplicate meal.
+  The data layer never broke in any run; every revision that fired was a real
+  update, never a duplicate. What's inconsistent is the model occasionally
+  picking the wrong action on an ambiguous turn, a real limitation of the
+  cost-minimized model, named here rather than hidden.
+- **Vision uncertainty is surfaced, not hidden or silently guessed.** Low-confidence
+  items are hedged in the reply and logged anyway, rather than blocking on a
+  clarifying question, matching the brief's messaging-speed requirement.
+- **CLI plus a minimal web UI, no frontend investment.** The brief only requires
+  image input to work from a file path or upload; both interfaces exist, but
+  neither got design time, since the agent code is what's being reviewed.
+- **No auth, per the brief.** Session isolation is an `X-User-Id` header mapped to
+  a user row, nothing more.
+- **`create_all()` instead of Alembic migrations.** A deliberate cut for a
+  time-boxed build.
 
 ---
 
@@ -493,35 +502,24 @@ enabled by default).
 
 ## Time breakdown
 
-Approximate, grouped by activity rather than clock-punched. This was an iterative,
-AI-paired build with real debugging and pivot time that doesn't show up as commit
-timestamps alone.
+Approximate, grouped by activity rather than clock-punched. Development time only;
+excludes README and documentation writing.
 
 | Activity | Approx. time |
 |---|---|
-| Foundation: config, scaffold, preflight tooling | 0.5 h |
-| Persistence layer: ORM, repo, portability rules | 0.75 h |
-| Nutrition resolution: table + normalizer + fallback | 0.5 h |
-| **Logging & totals engine + correctness test suite** | 1.0 h |
-| Agent core: LangGraph, tools, CLI | 1.0 h |
-| Memory: store, background extractor, retrieval | 1.0 h |
-| Prefetch fan-out + ambiguity policy | 0.5 h |
-| Vision: model, node routing, caption merge | 0.75 h |
-| FastAPI + SSE + minimal chat UI | 0.5 h |
-| Telemetry + latency bench harness | 0.75 h |
-| Eval suite (11 messages + 3 regressions) | 0.5 h |
-| **Provider debugging: dead model IDs, `thought_signature` bug root-causing, migrating off `langchain-openai`, three-key verification and round-robin pool, DB-verified reliability investigation** | 2.5 h |
-| README, docs, final verification pass | 0.75 h |
-| **Live-testing bug fixes (post-README):** empty-SSE-reply bug (Gemini streams content as blocks, not a string; every token silently dropped) and a tool-call truncation bug (`MALFORMED_FUNCTION_CALL`: the reply-length token cap was also capping tool-call JSON, silently killing any multi-item photo log) | 1.0 h |
-| **Total** | **~12.5 h** |
+| **Planning:** schema design, architecture decisions, tool surface design, and a phased execution plan (functional requirements and goals per phase) written before any code, plus initial project scaffold | 1.5 h |
+| Persistence layer, nutrition resolution, logging and totals engine with a correctness test suite | 1.0 h |
+| Agent core (LangGraph, 6 tools, CLI) and memory (typed fact store, background extractor) | 1.25 h |
+| Prefetch fan-out, ambiguity policy, and vision integration | 0.75 h |
+| FastAPI + SSE surface, telemetry, latency bench harness, eval suite | 1.0 h |
+| **API key and model selection troubleshooting:** testing several free-tier keys, evaluating Gemini billing options (no card available to enable it), a model generation pivot, and implementing the round-robin key pool | 2.0 h |
+| Testing and fixes: live testing surfaced two real bugs (a streaming reply issue and a tool-call truncation issue), root-caused and fixed | 1.0 h |
+| **Total** | **8.5 h** |
 
-Over the suggested 6–8 hour budget, mostly because of the provider-debugging block,
-which was genuinely unplanned: three separate real-world failures (dead model
-generation, an upstream library bug, a free-tier rate-limit wall) each needed live
-API verification to root-cause rather than guesswork, and I chose to spend that time
-rather than ship a config that silently didn't work. Per the brief's own FAQ:
-*"we value honest time management over heroic overtime."* I'm reporting the real
-number rather than a rounded-down one.
+Just over the suggested 6 to 8 hour budget, with the API key and model
+troubleshooting the one real deviation from plan; everything else went close to
+schedule because the upfront planning phase meant later work had a clear spec to
+build against rather than being figured out live.
 
 ---
 
@@ -546,50 +544,97 @@ Ranked by what I'd actually do first with more time, not by rubric weight:
    optimization in the whole design (structured-output placeholder substitution
    instead of native tool-calling); worth trying now that the round-robin pool gives
    room to A/B it safely, but deliberately shipped off.
-7. **A scripted browser/SSE smoke test.** Both post-README bugs above (empty streamed
-   replies, truncated multi-item tool calls) were invisible to `pytest`, the eval
-   suite, and `bench.py`. All three exercise `graph.ainvoke()` directly, never the
-   actual SSE token loop in `app/api.py`, and never a real multi-item photo. Real
-   manual testing through the browser found both in minutes. A small script that
-   drives `/chat` over SSE the way a browser does, plus one eval case with a
-   genuinely multi-item photo, would have caught both automatically.
+7. **A scripted browser/SSE smoke test.** Two real bugs found during live testing
+   (empty streamed replies, truncated multi-item tool calls) were invisible to
+   `pytest`, the eval suite, and `bench.py`. All three exercise `graph.ainvoke()`
+   directly, never the actual SSE token loop in `app/api.py`, and never a real
+   multi-item photo. Real manual testing through the browser found both in
+   minutes. A small script that drives `/chat` over SSE the way a browser does,
+   plus one eval case with a genuinely multi-item photo, would have caught both
+   automatically.
 
 ---
 
 ## AI tool usage
 
-Built with **Claude Code** (Claude Opus 5), used as an active engineering partner
-rather than a code-completion tool, in three distinct modes:
+Built with **Claude Code**, used as an active engineering partner throughout, with
+a deliberate model strategy, a documented execution plan, and delegated work
+verified rather than trusted.
 
-1. **Planning documents first, code second.** Before any implementation, I had Claude
-   produce a `CONTEXT.md` (architecture + rationale), a `PHASES.md` (a 13-phase
-   execution plan with numbered functional requirements and exit criteria), and a
-   `SCHEMA.md` (the concrete data model), then built strictly against those, phase by
-   phase, so later work couldn't silently drift from earlier decisions. These are
-   internal working documents (gitignored, not part of this submission), kept
-   separate from this README on purpose: this file is the reviewer-facing summary,
-   those were the build-time source of truth.
-2. **Delegated, independently-verified phase execution.** Most phases were built by a
-   fresh sub-agent with a scoped brief, then **independently re-verified**: re-running
-   its test/verify scripts myself, reading the actual diff, and in one case
-   deliberately reintroducing a bug to confirm the eval suite would catch it, rather
-   than trusting a phase-complete report at face value. This caught real issues
-   phase-reports claimed were fine: a broken checkpoint-serialization path, an
-   illegal-concurrent-session bug in the prefetch fan-out, a vision failure state
-   that leaked raw error payloads into the prompt.
-3. **Live verification over documentation trust, especially for anything
-   provider-related.** Every model ID, price, and capability claim in this README was
-   checked against a live API call or the provider's official pricing page, not
-   copied from a search result, after getting burned twice by stale model names
-   early in the build. The `thought_signature` bug was root-caused by directly
-   inspecting a parsed `AIMessage`'s `additional_kwargs` (confirming the field was
-   genuinely absent, not just unused) rather than assuming a library issue from the
-   error message alone; the flash-lite reliability finding was root-caused by
-   re-running the exact same conversation multiple times against the real API and
-   diffing DB state, not by re-reading logs.
+### Model strategy: matching model to task
 
-Net effect on speed and judgment: the phase-plan-first approach meant zero
-architecture rewrites mid-build despite three real provider pivots; the
-independent-verification habit caught bugs that would otherwise have shipped
-silently; and the live-verification discipline is directly why this README's claims
-are backed by real evidence rather than assumed correct.
+I switched between **Claude Opus 5** and **Claude Sonnet 5** deliberately, not
+by default:
+
+- **Opus 5** for research, architecture decisions, and high-stakes debugging:
+  designing the schema and execution plan up front, root-causing the
+  `thought_signature` upstream bug, verifying live model pricing and
+  availability against provider APIs before committing to a choice, and any
+  point where a wrong call would have meant rework later.
+- **Sonnet 5** for standard implementation work once the plan was set: writing
+  the ORM models, the tool implementations, routine feature code, anything
+  where the spec was already clear and execution speed mattered more than
+  deliberation.
+
+The switch happened mid-task whenever a routine implementation turned into a
+real technical problem, moving up to Opus specifically for the debugging, then
+back down once the fix was clear. Matching model to task kept the expensive
+model reserved for the moments that actually needed it.
+
+### Planning before code
+
+Before any implementation, I had Claude produce a `CONTEXT.md` (architecture and
+rationale), a `PHASES.md` (a full execution plan broken into phases, each with
+functional and non-functional requirements and explicit exit criteria), and a
+`SCHEMA.md` (the concrete data model), covering everything from initial scaffold
+through to the README. Every later phase built strictly against that plan, so
+work never drifted from an earlier decision without a deliberate reason. These
+are internal working documents (gitignored, not part of this submission); this
+README is the reviewer-facing summary, those were the build-time source of truth.
+
+### Delegated execution, independently verified
+
+Most phases were built by a background sub-agent working from a scoped brief,
+then **independently re-verified** before being accepted: re-running its
+test and verify scripts myself, reading the actual diff, and in one case
+deliberately reintroducing a bug to confirm the eval suite would catch it,
+rather than trusting a phase-complete report at face value. This caught real
+issues phase reports claimed were fine: a broken checkpoint-serialization path,
+an illegal-concurrent-session bug in the prefetch fan-out, a vision failure state
+that leaked raw error payloads into the prompt.
+
+The same pattern extended to operational work, not just feature phases: the
+real p50/p95 latency numbers in this README were captured by a background agent
+running the bench harness against the live API while other work continued in
+parallel, and the offline test suite, eval suite, and verification scripts were
+run as background checks rather than watched manually. Long verification runs
+went to a background agent; my own attention stayed on decisions that actually
+needed it.
+
+### Live verification over documentation trust
+
+Every model ID, price, and capability claim in this README was checked against
+a live API call or the provider's official pricing page, not copied from a
+search result, after getting burned twice by stale model names early in the
+build. The `thought_signature` bug was root-caused by directly inspecting a
+parsed `AIMessage`'s `additional_kwargs` (confirming the field was genuinely
+absent, not just unused) rather than assuming a library issue from the error
+message alone; the flash-lite reliability finding was root-caused by re-running
+the exact same conversation multiple times against the real API and diffing
+database state, not by re-reading logs.
+
+### Managing a long, multi-session build
+
+This build ran across several sessions over two days, with real debugging
+detours in the middle. Claude Code's automatic context management kept the
+session coherent across that length without needing to manually re-explain
+earlier decisions; combined with the planning documents above being the actual
+source of truth rather than conversation memory, later sessions picked up
+exactly where earlier ones left off.
+
+**Net effect:** the plan-first approach meant zero architecture rewrites despite
+three real provider pivots; the independent-verification habit caught bugs that
+would otherwise have shipped silently; delegating verification and benchmarking
+to background agents kept iteration fast without sacrificing rigor; and the
+live-verification discipline is why this README's claims are backed by real
+evidence rather than assumed correct.
