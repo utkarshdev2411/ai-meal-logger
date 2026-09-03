@@ -72,8 +72,6 @@ async def _ping(
     """One chat-completions round trip, timed, never raising."""
     started = time.perf_counter()
     payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
-    if model.startswith("gemini") and role == "text":
-        payload["reasoning_effort"] = "minimal"
     try:
         response = await client.post("/chat/completions", json=payload)
     except Exception as exc:  # network, timeout, DNS — all just "fail"
@@ -104,12 +102,38 @@ def _error_detail(response: httpx.Response) -> str:
     return f"HTTP {response.status_code}: {message or response.text[:120]}"
 
 
+async def _ping_text_native_genai(model: str, api_key: str) -> Check:
+    """The real app calls TEXT_MODEL through langchain-google-genai's native
+    client, not the OpenAI-compat endpoint (see app/agent/graph.py — needed
+    for Gemini 3.x's mandatory thought_signature tool-call round-trip, which
+    langchain-openai does not support). Ping through the same client so this
+    check proves what the app actually uses, not a different code path."""
+    from langchain_core.messages import HumanMessage
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    started = time.perf_counter()
+    try:
+        llm = ChatGoogleGenerativeAI(model=model, google_api_key=api_key, max_output_tokens=16)
+        response = await llm.ainvoke([HumanMessage(content="Reply with the single word: ok")])
+    except Exception as exc:
+        elapsed = (time.perf_counter() - started) * 1000
+        return Check("text", model, False, elapsed, f"{type(exc).__name__}: {exc}")
+
+    elapsed = (time.perf_counter() - started) * 1000
+    text = response.content if isinstance(response.content, str) else str(response.content)
+    return Check("text", model, True, elapsed, text.strip()[:60])
+
+
 async def run_checks(settings: Settings | None = None) -> list[Check]:
     """Ping all three roles concurrently and return their outcomes."""
     settings = settings or get_settings()
     api_key = settings.require_api_key()
 
-    text_messages = [{"role": "user", "content": "Reply with the single word: ok"}]
+    text_check = (
+        _ping_text_native_genai(settings.text_model, api_key)
+        if settings.text_model.startswith("gemini")
+        else None
+    )
     vision_messages = [
         {
             "role": "user",
@@ -137,13 +161,13 @@ async def run_checks(settings: Settings | None = None) -> list[Check]:
         },
         timeout=TIMEOUT_S,
     ) as client:
-        return list(
-            await asyncio.gather(
-                _ping(client, "text", settings.text_model, text_messages),
-                _ping(client, "vision", settings.vision_model, vision_messages, 24),
-                _ping(client, "extractor", settings.extractor_model, extractor_messages, 48),
-            )
-        )
+        checks = [
+            text_check
+            or _ping(client, "text", settings.text_model, [{"role": "user", "content": "Reply with the single word: ok"}]),
+            _ping(client, "vision", settings.vision_model, vision_messages, 24),
+            _ping(client, "extractor", settings.extractor_model, extractor_messages, 48),
+        ]
+        return list(await asyncio.gather(*checks))
 
 
 def report(checks: list[Check]) -> int:

@@ -40,6 +40,18 @@ def _ok(payload, request) -> httpx.Response:
     )
 
 
+def _mock_text_native(monkeypatch, check_models, *, ok: bool = True, detail: str = "ok") -> None:
+    """TEXT_MODEL routes through a different client (langchain-google-genai,
+    not httpx) whenever it's gemini-prefixed — see check_models.py's
+    _ping_text_native_genai. Mock that function directly rather than faking
+    the SDK's own transport."""
+
+    async def fake(model, api_key):
+        return check_models.Check("text", model, ok, 0.0, detail)
+
+    monkeypatch.setattr(check_models, "_ping_text_native_genai", fake)
+
+
 def test_bogus_model_id_exits_non_zero(check_models, settings, monkeypatch) -> None:
     """A provider 404 on an unknown model must fail the preflight."""
 
@@ -74,6 +86,7 @@ def test_one_failing_role_fails_the_whole_preflight(
         return _ok(payload, request)
 
     _mock_post(monkeypatch, responder)
+    _mock_text_native(monkeypatch, check_models)
 
     checks = asyncio.run(check_models.run_checks(settings))
 
@@ -85,13 +98,13 @@ def test_one_failing_role_fails_the_whole_preflight(
 
 def test_all_roles_healthy_exits_zero(check_models, settings, monkeypatch) -> None:
     captured = _mock_post(monkeypatch, _ok)
+    _mock_text_native(monkeypatch, check_models)
 
     checks = asyncio.run(check_models.run_checks(settings))
 
     assert check_models.report(checks) == 0
     assert {c.role for c in checks} == {"text", "vision", "extractor"}
     assert {p["model"] for p in captured} == {
-        settings.text_model,
         settings.vision_model,
         settings.extractor_model,
     }
@@ -100,6 +113,7 @@ def test_all_roles_healthy_exits_zero(check_models, settings, monkeypatch) -> No
 def test_vision_check_sends_an_actual_image(check_models, settings, monkeypatch) -> None:
     """FR-0.5: the vision role must be exercised with real image content."""
     captured = _mock_post(monkeypatch, _ok)
+    _mock_text_native(monkeypatch, check_models)
 
     asyncio.run(check_models.run_checks(settings))
 
@@ -120,6 +134,7 @@ def test_network_failure_is_reported_not_raised(
         raise httpx.ConnectTimeout("timed out", request=request)
 
     _mock_post(monkeypatch, responder)
+    _mock_text_native(monkeypatch, check_models, ok=False, detail="ConnectTimeout: timed out")
 
     checks = asyncio.run(check_models.run_checks(settings))
 
@@ -146,3 +161,22 @@ def test_missing_api_key_exits_non_zero_without_traceback(
     assert "Traceback" not in err
 
     check_models.get_settings.cache_clear()
+
+
+def test_text_native_genai_failure_is_reported_not_raised(check_models, monkeypatch) -> None:
+    class FakeGenAI:
+        def __init__(self, **kwargs):
+            pass
+
+        async def ainvoke(self, messages):
+            raise RuntimeError("boom")
+
+    import langchain_google_genai
+
+    monkeypatch.setattr(langchain_google_genai, "ChatGoogleGenerativeAI", FakeGenAI)
+
+    check = asyncio.run(check_models._ping_text_native_genai("gemini-3.6-flash", "test-key"))
+
+    assert not check.ok
+    assert "RuntimeError" in check.detail
+    assert "boom" in check.detail

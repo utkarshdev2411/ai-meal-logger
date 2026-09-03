@@ -5,6 +5,7 @@
 langgraph==1.2.11
 langchain-core==1.6.1
 langchain-openai==1.6.0        # OpenAI-compatible client; works against any base_url
+langchain-google-genai==4.4.0  # TEXT_MODEL only, Gemini's thought_signature tool-call round-trip
 
 # --- validation / config ---
 pydantic==2.13.5

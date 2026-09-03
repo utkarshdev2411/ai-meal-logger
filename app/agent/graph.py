@@ -3,6 +3,7 @@ from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
@@ -30,12 +31,17 @@ def _trim_history(messages: list[BaseMessage], history_turns: int) -> list[BaseM
 
 def build_llm() -> BaseChatModel:
     settings = get_settings()
+    if settings.text_model.startswith("gemini"):
+        return ChatGoogleGenerativeAI(
+            model=settings.text_model,
+            google_api_key=settings.require_api_key(),
+            max_output_tokens=settings.reply_max_tokens,
+        )
     return ChatOpenAI(
         model=settings.text_model,
         base_url=settings.llm_base_url,
         api_key=settings.require_api_key(),
         max_tokens=settings.reply_max_tokens,
-        model_kwargs={"reasoning_effort": "minimal"} if settings.text_model.startswith("gemini") else {},
     )
 
 def build_graph(
