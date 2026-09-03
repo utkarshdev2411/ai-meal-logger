@@ -1,11 +1,5 @@
-"""Write / rank / budget / retrieve durable facts (CONTEXT.md §6, FR-5.7).
+"""Write / rank / budget / retrieve durable facts."""
 
-Two callers write through `write_memory` — the explicit `remember` tool and
-the background extractor — but neither the storage rule nor the never-store
-list is enforced here. That judgement belongs to whichever caller decided the
-fact is worth persisting; this module's job is just the persist-and-rank
-mechanics, so it stays usable (and testable) by both write paths unchanged.
-"""
 
 from __future__ import annotations
 

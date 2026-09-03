@@ -1,10 +1,5 @@
-"""Offline checks for the image path and the prefetch block.
+"""Verification script for vision and prefetch paths."""
 
-No API key or network needed: the vision HTTP call is stubbed, so this exercises
-the real downscale -> parse -> retry -> degrade chain and the real graph, and
-pins the two graded regressions (photo+caption -> ONE meal; zero tool calls for
-an already-prefetched query).
-"""
 
 import asyncio
 import io

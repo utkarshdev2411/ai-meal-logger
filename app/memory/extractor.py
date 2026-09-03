@@ -1,11 +1,5 @@
-"""Background fact proposal (FR-5.5, FR-5.6, NFR-5.1, NFR-5.3).
+"""Background fact proposal extractor."""
 
-Mirrors `app/nutrition/resolve.py::_call_llm_batch`'s httpx + `json_object` +
-`model_validate` pattern deliberately, not a fresh design — same provider,
-same graceful-failure shape, one fewer thing to review. `extract_and_write` is
-the fire-and-forget entry point: it must never raise, since it's meant to be
-handed to `asyncio.create_task` and walk away from.
-"""
 
 from __future__ import annotations
 

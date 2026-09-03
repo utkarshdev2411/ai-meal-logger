@@ -1,14 +1,5 @@
-"""Typed graph state for the text-path agent (FR-4.2).
+"""Typed graph state for the text-path agent."""
 
-`messages` uses LangGraph's `add_messages` reducer so each node returns only
-the messages it adds, not the whole history. `last_meal_id` and
-`pending_clarification` are the seams §5/§6 build on (memory-aware routines,
-ambiguity tracking) — this phase writes `last_meal_id` (from `log_meal`/
-`revise_meal` tool results, via `Command` updates) but doesn't yet branch on
-`pending_clarification`; the one-question-per-turn rule is enforced by the
-system prompt, not graph control flow, until there's a reason to make it
-stateful.
-"""
 
 from __future__ import annotations
 

@@ -1,18 +1,5 @@
-"""System prompt: persona, ambiguity policy (CONTEXT.md §7), reply-length cap,
-tool guidance. Static and ordered persona-first so it stays a stable prefix for
-prompt caching. The prefetch block (memory facts + today's totals + recent-meal
-digest, gathered in `agent/prefetch.py`) is volatile per-user content, so it's
-appended *after* this static text via `build_system_prompt`, never interpolated
-inside it.
+"""System prompt definition for the agent."""
 
-That block is why the tool guidance below tells the model NOT to call
-get_daily_totals or search_meals for anything already in it: those answers are
-already in context, and a redundant tool call costs a full ~1-2s LLM round trip
-(CONTEXT.md §8.2).
-
-Tool descriptions themselves stay one-line (see `app/agent/tools/`) — the
-policy reasoning lives here instead, per CLAUDE.md's terse-schema guidance.
-"""
 
 from __future__ import annotations
 

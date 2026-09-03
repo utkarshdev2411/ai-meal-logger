@@ -1,4 +1,5 @@
-"""T-0.1 — settings load from .env.example; a missing key errors readably."""
+"""Tests for application settings and configuration."""
+
 
 from __future__ import annotations
 

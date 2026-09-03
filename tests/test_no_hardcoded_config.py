@@ -1,10 +1,5 @@
-"""T-0.3 / NFR-0.1 — configuration values live only in app/config.py.
+"""Test that configuration values live only in app/config.py."""
 
-Greps the app/ and scripts/ trees for model IDs, provider base URLs and
-database URLs. app/config.py is the single allowed home for all three; a hit
-anywhere else means swapping provider, model or DB backend has stopped being a
-pure config change.
-"""
 
 from __future__ import annotations
 

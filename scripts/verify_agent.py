@@ -1,22 +1,5 @@
-"""Structural + functional smoke test for the Phase 4 agent core.
+"""Smoke test for the agent core."""
 
-No `LLM_API_KEY` is available in this environment, so this can't do a live
-call against a real model. What it *does* prove, against a real (scratch)
-SQLite DB through the real `mealops`/`repo` layers: the graph compiles and
-tool-loops correctly, `log_meal` -> `revise_meal` -> `get_daily_totals` chain
-through real state, the item_id handoff works (an item logged in turn 1 is
-addressed by id in turn 2's correction, exactly as the agent would have to
-do it from conversation history), and a correction updates rather than
-double-counts.
-
-The LLM is replaced with a small scripted fake that emits pre-set tool calls
-in order — it stands in for "the model decided to call this tool with these
-args", not for judging whether a *real* model would decide so. Run:
-
-    python scripts/verify_agent.py
-
-Prints a transcript with tool names called per turn; not a pass/fail gate.
-"""
 
 from __future__ import annotations
 

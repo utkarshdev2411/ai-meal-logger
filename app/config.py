@@ -1,13 +1,5 @@
-"""Typed, env-sourced application settings.
+"""Typed, env-sourced application settings."""
 
-This module is the **only** place in the codebase where a model ID, an LLM base
-URL, or a database URL may appear (NFR-0.1). Everything else reads them from
-``get_settings()``. That is what makes swapping provider, model, or database
-backend a config change rather than a code change.
-
-The defaults below are chosen so that the app imports and starts with nothing
-but ``.env.example`` plus a real API key (NFR-0.2).
-"""
 
 from __future__ import annotations
 

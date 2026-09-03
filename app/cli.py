@@ -1,18 +1,5 @@
-"""Interactive terminal chat loop for the text-path agent (FR-4.6).
+"""Interactive terminal chat loop for the text-path agent."""
 
-`python -m app.cli` opens one DB session per turn, ensures a demo user exists,
-runs the graph, and prints the reply. Thread state persists across turns
-within this process via an in-memory checkpointer (`MemorySaver`) built once
-at startup and threaded through every turn's fresh graph build.
-
-After each reply, background memory extraction (FR-5.5) is kicked off via
-`asyncio.create_task` — never awaited before the next prompt, so it adds 0ms
-to the turn. It opens its OWN db session rather than reusing the turn's: the
-turn's `async with async_session_factory()` block has already exited (and may
-close/recycle its connection) by the time the background task actually runs.
-Pending tasks are tracked and drained with `asyncio.gather` on clean exit so a
-still-in-flight extraction isn't silently dropped.
-"""
 
 from __future__ import annotations
 

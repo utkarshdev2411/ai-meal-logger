@@ -1,8 +1,5 @@
-"""SQLAlchemy 2.0 declarative models — built verbatim from docs/SCHEMA.md Part 1.
+"""SQLAlchemy declarative database models."""
 
-Portable by construction: String(36) PKs with Python-side uuid4 defaults, JSON
-columns, UTC-aware DateTime, Numeric for macros. See SCHEMA.md §1.11.
-"""
 
 from __future__ import annotations
 

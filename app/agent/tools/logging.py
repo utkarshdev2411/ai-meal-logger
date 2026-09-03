@@ -1,18 +1,5 @@
-"""`log_meal` / `revise_meal` tool factories — thin wraps over `mealops.logging_ops`.
+"""`log_meal` / `revise_meal` tool factories — wraps over `mealops.logging_ops`."""
 
-Tools are built per-request, closed over an already-open DB `session` and the
-caller's `user_id` (the graph is rebuilt per turn in `app/cli.py`, so this is
-just a closure — no contextvar needed). Both tools return a `Command` that
-updates `last_meal_id` in graph state *and* appends the `ToolMessage`, which is
-the mechanism a LangChain tool has for touching state beyond its own return
-value.
-
-Every item in a tool's textual result is tagged `item_id=<uuid>` — that's the
-handoff a later "actually 3 rotis not 2" needs: the agent has no other way to
-learn an item's id except reading it back out of an earlier tool result in the
-conversation, so the id has to be visible text, not just structured data the
-model never sees rendered.
-"""
 
 from __future__ import annotations
 

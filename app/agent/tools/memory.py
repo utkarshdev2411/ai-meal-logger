@@ -1,18 +1,5 @@
-"""`remember` / `recall` tool factories (FR-5.3, FR-5.4).
+"""`remember` / `recall` tool factories."""
 
-`remember` is the EXPLICIT write path — the user stated something plainly
-("i'm vegetarian btw"), so it's written at confidence=1.0 with no floor to
-clear. That's deliberately a different function from
-`app/memory/extractor.py::extract_and_write`, which is model-proposed and
-needs a confidence floor: collapsing the two would blur "the user said this"
-with "the model guessed this", which is exactly the distinction a reviewer
-would probe.
-
-`recall` is the long-tail read path — prefetch (this phase's synchronous
-retrieve in `agent/graph.py`) covers top-K by rank, so `recall` exists for
-whatever didn't make that cut: a simple filter over `get_active_memories`,
-no ranking, no budget.
-"""
 
 from __future__ import annotations
 

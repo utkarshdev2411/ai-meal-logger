@@ -1,12 +1,5 @@
-"""Correctness tests for the logging & totals engine (PHASES.md Phase 3).
+"""Correctness tests for the logging and totals engine."""
 
-Everything here uses only foods resolvable purely from `NUTRITION_TABLE`
-(roti, paratha, chai, rice, dal, ...) so `nutrition.resolve()` never reaches
-the LLM fallback — the whole suite runs offline, no API key, no network.
-
-Each test gets a fresh in-memory SQLite engine (StaticPool keeps the one
-:memory: connection alive for the session's lifetime) so tests share no state.
-"""
 
 from __future__ import annotations
 

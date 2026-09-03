@@ -1,7 +1,5 @@
-"""T-0.2 — the preflight exits non-zero for a bogus model ID.
+"""Preflight model check tests."""
 
-All HTTP is mocked: the suite must pass offline with no API key set.
-"""
 
 from __future__ import annotations
 

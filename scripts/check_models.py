@@ -1,16 +1,6 @@
 #!/usr/bin/env python
-"""Preflight: prove the three configured model roles actually respond.
+"""Preflight check for configured LLM models."""
 
-Free-tier model IDs get renamed, retired and rate-limited without notice, so a
-demo that has not been preflighted is a demo that might not have a text model.
-This script pings each role through the configured OpenAI-compatible endpoint,
-reports latency and ok/fail per role, and exits non-zero if any role failed.
-
-The vision check sends a real (tiny, generated) PNG as a base64 data URL, so it
-exercises the multimodal path rather than just proving the model ID exists.
-
-    python scripts/check_models.py
-"""
 
 from __future__ import annotations
 

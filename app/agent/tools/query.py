@@ -1,12 +1,5 @@
-"""`get_daily_totals` / `search_meals` — read-only tools over `mealops`/`repo`.
+"""`get_daily_totals` / `search_meals` — read-only tools over `mealops`/`repo`."""
 
-`search_meals` wraps `repo.recent_meals` directly (no new repo helper needed):
-it fetches everything from the target date onward and filters to that exact
-date in Python. That's list filtering over already-fetched ORM rows, not SQL,
-so it doesn't violate "no SQL outside repo.py" — it's the same kind of
-post-fetch shaping `mealops` itself does. Good enough for "same as yesterday";
-`memories`-based "my usual" routine matching is out of scope this phase.
-"""
 
 from __future__ import annotations
 

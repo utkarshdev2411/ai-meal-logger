@@ -1,11 +1,5 @@
-"""Hardcoded nutrition table (FR-2.1).
+"""Nutrition table dataset."""
 
-Each entry is per **default unit** (a single serving as most people would say
-it, e.g. one roti, one bowl of dal) — `resolve()` multiplies by quantity to
-get item totals, per docs/SCHEMA.md §1.3. Values are reasonable household
-estimates, not lab-grade — good enough for a calorie-tracking chat, not a
-diet-clinic printout.
-"""
 
 from __future__ import annotations
 

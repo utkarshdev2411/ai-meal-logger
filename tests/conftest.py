@@ -1,9 +1,5 @@
-"""Shared test fixtures.
+"""Shared test fixtures."""
 
-The whole suite must pass offline with no API key set, so every test that
-touches settings gets an environment scrubbed of the real ones — otherwise a
-developer's exported LLM_API_KEY silently changes what the tests assert.
-"""
 
 from __future__ import annotations
 

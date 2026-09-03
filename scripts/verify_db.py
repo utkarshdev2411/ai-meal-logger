@@ -1,9 +1,5 @@
-"""Throwaway verification of the persistence layer against a scratch SQLite file.
+"""Verification script for the persistence layer."""
 
-Not a test suite (per the brief) — a script proving the correctness-critical
-paths: no double-count on revision, soft-delete zeroes totals, memory
-supersede, and the partial unique index enforced at the DB level.
-"""
 
 from __future__ import annotations
 

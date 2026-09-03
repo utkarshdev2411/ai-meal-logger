@@ -1,14 +1,6 @@
 #!/usr/bin/env python
-"""Manual verification for `app/nutrition` (no formal test suite, per the brief).
+"""Verification script for the nutrition module."""
 
-    python scripts/verify_nutrition.py
-
-Checks 1-3 need no network access or API key: table hits never construct an
-LLM client (see `resolve()` — misses is only appended to when the table and
-cache both miss, and `_call_llm_batch` is only called if `misses` is
-non-empty). Check 4 monkeypatches `_call_llm_batch` to count invocations
-instead of making a real call.
-"""
 
 from __future__ import annotations
 

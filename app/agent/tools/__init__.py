@@ -1,10 +1,5 @@
-"""Tool surface for the text-path agent — factories bound to a request's DB
-session + user_id (CONTEXT.md §4).
+"""Tool surface for the text-path agent."""
 
-Six tools now: `remember`/`recall` (FR-5.3, FR-5.4) join the four from Phase
-4 now that `app/memory/` exists — the "don't ship a stub" reasoning that kept
-them out before no longer applies.
-"""
 
 from __future__ import annotations
 

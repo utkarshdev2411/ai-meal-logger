@@ -1,11 +1,5 @@
-"""Throwaway verification of the memory layer (FR-5.*), same style/quality
-bar as `scripts/verify_db.py` / `scripts/verify_agent.py` — no formal test
-suite per the brief. Uses a scratch SQLite *file* DB (not `:memory:`) so
-cross-session persistence is actually proven, plus a scripted fake LLM for
-the graph check and mocked httpx calls for the extractor.
+"""Verification script for the memory layer."""
 
-Run: python scripts/verify_memory.py
-"""
 
 from __future__ import annotations
 

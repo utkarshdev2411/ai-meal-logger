@@ -1,4 +1,5 @@
-"""Collapse plurals, synonyms, and common spelling variants to a table key (FR-2.2)."""
+"""Collapse plurals, synonyms, and common spelling variants to a table key."""
+
 
 from __future__ import annotations
 

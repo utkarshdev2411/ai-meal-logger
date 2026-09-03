@@ -1,9 +1,5 @@
-"""Item -> macros (FR-2.3, FR-2.4, FR-2.5).
+"""Item to macros resolution module."""
 
-Order: normalized table lookup -> in-process cache -> one batched LLM call for
-whatever's left. Never raises — an item the LLM can't place either still
-becomes a `ResolvedItem`, just a low-confidence one.
-"""
 
 from __future__ import annotations
 

@@ -1,16 +1,5 @@
-"""Logging & totals engine (FR-3.1 - FR-3.6) — the layer above `db/repo.py`.
+"""Logging & totals engine — layer above repo.py."""
 
-Wires `nutrition.resolve` and `repo.py` into two coherent operations
-(`log_meal`, `revise_meal`) plus a totals read (`get_totals`). No SQL lives
-here — every read/write goes through `repo.py`.
-
-The correctness invariant (CONTEXT.md §3): there is no stored running total,
-anywhere. Every totals number below is fetched fresh via `repo.daily_totals`
-right before it's returned — never accumulated in Python and written back.
-A correction is therefore always an UPDATE of the existing meal's items via
-`repo.replace_meal_items`, never a new `repo.insert_meal` — otherwise the
-same food would be counted twice under two meal rows.
-"""
 
 from __future__ import annotations
 
