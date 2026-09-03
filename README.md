@@ -512,7 +512,8 @@ timestamps alone.
 | Eval suite (11 messages + 3 regressions) | 0.5 h |
 | **Provider debugging: dead model IDs, `thought_signature` bug root-causing, migrating off `langchain-openai`, three-key verification and round-robin pool, DB-verified reliability investigation** | 2.5 h |
 | README, docs, final verification pass | 0.75 h |
-| **Total** | **~11.5 h** |
+| **Live-testing bug fixes (post-README):** empty-SSE-reply bug (Gemini streams content as blocks, not a string — every token silently dropped) and a tool-call truncation bug (`MALFORMED_FUNCTION_CALL` — the reply-length token cap was also capping tool-call JSON, silently killing any multi-item photo log) | 1.0 h |
+| **Total** | **~12.5 h** |
 
 Over the suggested 6–8 hour budget — mostly because of the provider-debugging block,
 which was genuinely unplanned: three separate real-world failures (dead model
@@ -545,6 +546,13 @@ Ranked by what I'd actually do first with more time, not by rubric weight:
    optimization in the whole design (structured-output placeholder substitution
    instead of native tool-calling); worth trying now that the round-robin pool gives
    room to A/B it safely, but deliberately shipped off.
+7. **A scripted browser/SSE smoke test.** Both post-README bugs above (empty streamed
+   replies, truncated multi-item tool calls) were invisible to `pytest`, the eval
+   suite, and `bench.py` — all three exercise `graph.ainvoke()` directly, never the
+   actual SSE token loop in `app/api.py`, and never a real multi-item photo. Real
+   manual testing through the browser found both in minutes. A small script that
+   drives `/chat` over SSE the way a browser does, plus one eval case with a
+   genuinely multi-item photo, would have caught both automatically.
 
 ---
 
