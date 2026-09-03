@@ -65,10 +65,11 @@ async def run_turn(
     thread_id: str,
     path: str,
     text: str,
-    queue: list,
+    queue: list | None,
     image_id: str | None = None,
+    real: bool = False,
 ) -> tuple[list, str]:
-    llm = ScriptedLLM(queue)
+    llm = None if real else ScriptedLLM(queue)
     settings = get_settings()
     timer = TurnTimer(
         turn_id=new_turn_id(),
@@ -127,8 +128,8 @@ def item_id_from_tool_message(messages: list, tool_name: str, item_name: str) ->
     return match.group(1)
 
 
-async def bench_log_intent(user_id: str, iteration: int, turn_ids: list[str]) -> None:
-    queue = [
+async def bench_log_intent(user_id: str, iteration: int, turn_ids: list[str], real: bool = False) -> None:
+    queue = None if real else [
         tool_call_msg(
             "log_meal",
             {
@@ -149,12 +150,13 @@ async def bench_log_intent(user_id: str, iteration: int, turn_ids: list[str]) ->
         "text",
         "had 2 parathas and chai for breakfast",
         queue,
+        real=real,
     )
     turn_ids.append(turn_id)
 
 
-async def bench_query_intent(user_id: str, iteration: int, turn_ids: list[str]) -> None:
-    queue = [AIMessage(content="You're at about 520 kcal today.")]
+async def bench_query_intent(user_id: str, iteration: int, turn_ids: list[str], real: bool = False) -> None:
+    queue = None if real else [AIMessage(content="You're at about 520 kcal today.")]
     _, turn_id = await run_turn(
         user_id,
         MemorySaver(),
@@ -162,13 +164,24 @@ async def bench_query_intent(user_id: str, iteration: int, turn_ids: list[str]) 
         "text",
         "how am I doing on calories?",
         queue,
+        real=real,
     )
     turn_ids.append(turn_id)
 
 
-async def bench_correction_intent(user_id: str, iteration: int, turn_ids: list[str]) -> None:
+async def bench_correction_intent(user_id: str, iteration: int, turn_ids: list[str], real: bool = False) -> None:
     checkpointer = MemorySaver()
     thread_id = f"bench-correction-{iteration}"
+
+    if real:
+        await run_turn(
+            user_id, checkpointer, thread_id, "text", "had 2 parathas for breakfast", None, real=True
+        )
+        _, turn_id = await run_turn(
+            user_id, checkpointer, thread_id, "text", "actually that was 3 rotis not 2", None, real=True
+        )
+        turn_ids.append(turn_id)
+        return
 
     setup_queue = [
         tool_call_msg(
@@ -197,11 +210,11 @@ async def bench_correction_intent(user_id: str, iteration: int, turn_ids: list[s
     turn_ids.append(turn_id)
 
 
-async def bench_image_prewarmed(user_id: str, iteration: int, turn_ids: list[str]) -> None:
+async def bench_image_prewarmed(user_id: str, iteration: int, turn_ids: list[str], real: bool = False) -> None:
     async with async_session_factory() as session:
         image_id = await make_image(session, user_id, "ready", GOOD_OBS.model_dump())
 
-    queue = [
+    queue = None if real else [
         tool_call_msg(
             "log_meal",
             {
@@ -220,13 +233,28 @@ async def bench_image_prewarmed(user_id: str, iteration: int, turn_ids: list[str
         "half of this was my brother's",
         queue,
         image_id=image_id,
+        real=real,
     )
     turn_ids.append(turn_id)
 
 
-async def bench_image_cold(user_id: str, iteration: int, turn_ids: list[str]) -> None:
+async def bench_image_cold(user_id: str, iteration: int, turn_ids: list[str], real: bool = False) -> None:
     async with async_session_factory() as session:
         image_id = await make_image(session, user_id, "pending", None)
+
+    if real:
+        _, turn_id = await run_turn(
+            user_id,
+            MemorySaver(),
+            f"bench-image-cold-{iteration}",
+            "image",
+            "half of this was my brother's",
+            None,
+            image_id=image_id,
+            real=True,
+        )
+        turn_ids.append(turn_id)
+        return
 
     queue = [
         tool_call_msg(
@@ -275,10 +303,11 @@ def render_table(headers: list[str], rows: list[list[str]]) -> str:
 
 async def main() -> None:
     settings = get_settings()
-    parser = argparse.ArgumentParser(description="CalorAI latency bench (scripted LLM)")
-    parser.add_argument("--runs", type=int, default=settings.bench_default_runs)
+    parser = argparse.ArgumentParser(description="CalorAI latency bench (scripted LLM by default)")
+    parser.add_argument("--runs", type=int, default=None)
+    parser.add_argument("--real", action="store_true", help="use the real configured LLM, not a scripted one")
     args = parser.parse_args()
-    n = args.runs
+    n = args.runs if args.runs is not None else (8 if args.real else settings.bench_default_runs)
 
     await create_all()
     async with async_session_factory() as session:
@@ -294,10 +323,14 @@ async def main() -> None:
     ]
 
     case_turn_ids: dict[str, list[str]] = {name: [] for name, _, _ in cases}
+    failures: list[str] = []
 
     for name, fn, _ in cases:
         for i in range(n):
-            await fn(user_id, i, case_turn_ids[name])
+            try:
+                await fn(user_id, i, case_turn_ids[name], real=args.real)
+            except Exception as exc:
+                failures.append(f"{name} run {i}: {type(exc).__name__}: {exc}")
 
     await flush()
 
@@ -308,11 +341,19 @@ async def main() -> None:
     turn_id_to_case = {t: name for name, ids in case_turn_ids.items() for t in ids}
     turn_id_to_path = {t: path for name, _, path in cases for t in case_turn_ids[name]}
 
-    print("CalorAI latency bench — measured against a scripted/fake LLM (no network, no real")
-    print("model latency). Real DB, prefetch, and vision-stub timing; NOT final honest numbers.")
-    print("Re-run this same script once a real LLM_API_KEY is set to get those.")
+    if args.real:
+        print(f"CalorAI latency bench — measured against the real configured LLM ({settings.text_model}).")
+        print("Real network, real model latency, real key-pool round-robin. Honest numbers.")
+    else:
+        print("CalorAI latency bench — measured against a scripted/fake LLM (no network, no real")
+        print("model latency). Real DB, prefetch, and vision-stub timing; NOT final honest numbers.")
+        print("Re-run with --real once a real LLM_API_KEY is set to get those.")
     print()
     print(f"runs per case: {n}, db_backend={samples[0].db_backend if samples else 'sqlite'}")
+    if failures:
+        print(f"\n{len(failures)} run(s) failed and were skipped:")
+        for f in failures:
+            print(f"  - {f}")
     print()
 
     print("## Totals per case\n")
