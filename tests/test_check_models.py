@@ -78,8 +78,12 @@ def test_one_failing_role_fails_the_whole_preflight(
 ) -> None:
     """Two healthy roles must not mask a third that has gone away."""
 
+    def _is_vision_payload(payload: dict) -> bool:
+        content = payload["messages"][0]["content"]
+        return isinstance(content, list) and any(p.get("type") == "image_url" for p in content)
+
     def responder(payload, request) -> httpx.Response:
-        if payload["model"] == settings.vision_model:
+        if _is_vision_payload(payload):
             return httpx.Response(
                 429, request=request, json={"error": {"message": "rate limited"}}
             )

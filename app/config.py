@@ -11,7 +11,9 @@ but ``.env.example`` plus a real API key (NFR-0.2).
 
 from __future__ import annotations
 
+import itertools
 from functools import lru_cache
+from threading import Lock
 
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,11 +27,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Together, a local vLLM, Gemini's compat layer) works by changing this alone.
 DEFAULT_LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
-# Free-tier OpenRouter IDs, present on the provider's model list as of
-# 2026-09-01. Free-tier IDs rotate and get rate-limited without notice, so
-# always run `python scripts/check_models.py` before relying on them.
-DEFAULT_TEXT_MODEL = "gemini-3.6-flash"
-DEFAULT_VISION_MODEL = "gemini-3.5-flash-lite"
+# One model for all three roles, by explicit choice: gemini-3.1-flash-lite,
+# confirmed live (tool calling, image input, JSON extraction) against every
+# key in the pool on 2026-09-03. Quota headroom comes from the key pool
+# (see next_api_key), not from spreading roles across model tiers.
+DEFAULT_TEXT_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_VISION_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_EXTRACTOR_MODEL = "gemini-3.1-flash-lite"
 
 # SQLite so a clean clone runs with zero setup; swap for
@@ -61,8 +64,15 @@ class Settings(BaseSettings):
         ...,
         description="API key for the OpenAI-compatible provider. Required.",
     )
+    llm_api_keys_extra: str = Field(
+        default="",
+        description="Comma-separated additional keys, round-robin-ed with llm_api_key.",
+    )
 
-    # --- the three model roles (never one model for everything) -----------
+    # --- the three model roles ---------------------------------------------
+    # All three point at the same model by design here: this project runs a
+    # pool of API keys round-robin (see next_api_key), which buys quota
+    # headroom that a single key's per-model daily cap cannot.
     text_model: str = DEFAULT_TEXT_MODEL
     vision_model: str = DEFAULT_VISION_MODEL
     extractor_model: str = DEFAULT_EXTRACTOR_MODEL
@@ -91,13 +101,43 @@ class Settings(BaseSettings):
         return bool(key) and "replace" not in key.lower()
 
     def require_api_key(self) -> str:
-        """Return the API key, or raise a readable error instead of a 401 later."""
+        """Return the primary API key, or raise a readable error instead of a 401 later."""
         if not self.has_api_key:
             raise MissingApiKeyError(
                 "LLM_API_KEY is not set. Copy .env.example to .env and put a real "
                 "provider API key in it, or export LLM_API_KEY in your shell."
             )
         return self.llm_api_key.strip()
+
+    @property
+    def api_key_pool(self) -> list[str]:
+        """The primary key plus every key in ``LLM_API_KEYS_EXTRA``, deduped,
+        in order. ``require_api_key()`` still validates the primary key is
+        present; this just expands the pool ``next_api_key`` rotates over."""
+        primary = self.require_api_key()
+        extra = [k.strip() for k in self.llm_api_keys_extra.split(",") if k.strip()]
+        pool: list[str] = []
+        for key in [primary, *extra]:
+            if key not in pool:
+                pool.append(key)
+        return pool
+
+
+_key_cycle_lock = Lock()
+_key_cycle: itertools.cycle | None = None
+_key_cycle_pool: tuple[str, ...] = ()
+
+
+def next_api_key() -> str:
+    """Round-robin across ``Settings.api_key_pool``. A single key behaves
+    exactly like calling ``require_api_key()`` every time."""
+    global _key_cycle, _key_cycle_pool
+    pool = tuple(get_settings().api_key_pool)
+    with _key_cycle_lock:
+        if pool != _key_cycle_pool:
+            _key_cycle = itertools.cycle(pool)
+            _key_cycle_pool = pool
+        return next(_key_cycle)
 
 
 @lru_cache(maxsize=1)

@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from app.agent.prompts import build_system_prompt
 from app.agent.state import AgentState
 from app.agent.tools import build_tools
-from app.config import get_settings
+from app.config import get_settings, next_api_key
 from app.agent.prefetch import prefetch, render_prefetch_block
 from app.vision.process import process_image_by_id
 from app.telemetry import TurnTimer
@@ -34,13 +34,13 @@ def build_llm() -> BaseChatModel:
     if settings.text_model.startswith("gemini"):
         return ChatGoogleGenerativeAI(
             model=settings.text_model,
-            google_api_key=settings.require_api_key(),
+            google_api_key=next_api_key(),
             max_output_tokens=settings.reply_max_tokens,
         )
     return ChatOpenAI(
         model=settings.text_model,
         base_url=settings.llm_base_url,
-        api_key=settings.require_api_key(),
+        api_key=next_api_key(),
         max_tokens=settings.reply_max_tokens,
     )
 

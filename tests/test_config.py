@@ -48,12 +48,32 @@ def test_env_example_covers_every_key(clean_env, repo_root) -> None:
     assert expected == declared
 
 
-def test_three_model_roles_are_distinct(clean_env, repo_root) -> None:
-    """Never one model for everything."""
+def test_key_pool_deduplicates_and_preserves_order(clean_env, monkeypatch, repo_root) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "key-a")
+    monkeypatch.setenv("LLM_API_KEYS_EXTRA", "key-b, key-a, key-c")
     settings = _env_example_settings(repo_root)
-    roles = {settings.text_model, settings.vision_model, settings.extractor_model}
 
-    assert len(roles) == 3
+    assert settings.api_key_pool == ["key-a", "key-b", "key-c"]
+
+
+def test_next_api_key_round_robins_the_pool(clean_env, monkeypatch, repo_root) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "key-a")
+    monkeypatch.setenv("LLM_API_KEYS_EXTRA", "key-b,key-c")
+    settings = _env_example_settings(repo_root)
+    monkeypatch.setattr(config_module, "get_settings", lambda: settings)
+
+    seen = [config_module.next_api_key() for _ in range(6)]
+
+    assert seen == ["key-a", "key-b", "key-c", "key-a", "key-b", "key-c"]
+
+
+def test_next_api_key_with_a_single_key_always_returns_it(clean_env, monkeypatch, repo_root) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "only-key")
+    monkeypatch.setenv("LLM_API_KEYS_EXTRA", "")
+    settings = _env_example_settings(repo_root)
+    monkeypatch.setattr(config_module, "get_settings", lambda: settings)
+
+    assert all(config_module.next_api_key() == "only-key" for _ in range(3))
 
 
 def test_missing_api_key_gives_readable_error(clean_env, monkeypatch) -> None:

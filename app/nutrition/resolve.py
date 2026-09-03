@@ -14,7 +14,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
+from app.config import get_settings, next_api_key
 from app.nutrition.normalize import normalize
 from app.nutrition.table import NUTRITION_TABLE
 
@@ -138,7 +138,7 @@ async def _call_llm_batch(names: list[str]) -> dict[str, LLMNutritionItem]:
     """One call for every miss in the batch (FR-2.4). Returns a name -> item map;
     missing/unparseable names are simply absent, and the caller falls back."""
     settings = get_settings()
-    api_key = settings.require_api_key()
+    api_key = next_api_key()
 
     prompt = (
         "For each food item below, estimate its nutrition for ONE typical default "

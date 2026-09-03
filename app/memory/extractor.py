@@ -16,7 +16,7 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
+from app.config import get_settings, next_api_key
 from app.memory.store import write_memory
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ async def extract_facts(
     a failure yields an empty list, same fallback shape as nutrition's."""
     settings = get_settings()
     try:
-        api_key = settings.require_api_key()
+        api_key = next_api_key()
     except Exception:
         return []
 

@@ -3,7 +3,7 @@ import json
 
 import httpx
 
-from app.config import get_settings
+from app.config import get_settings, next_api_key
 from app.vision.schema import VisionObservation
 
 _TIMEOUT_S = 30.0
@@ -64,7 +64,7 @@ async def extract_vision(image_bytes: bytes, mime_type: str) -> VisionObservatio
 
     async with httpx.AsyncClient(
         base_url=settings.llm_base_url.rstrip("/"),
-        headers={"Authorization": f"Bearer {settings.require_api_key()}"},
+        headers={"Authorization": f"Bearer {next_api_key()}"},
         timeout=_TIMEOUT_S,
     ) as client:
         last_error: Exception | None = None

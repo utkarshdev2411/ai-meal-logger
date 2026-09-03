@@ -120,14 +120,19 @@ async def _ping_text_native_genai(model: str, api_key: str) -> Check:
         return Check("text", model, False, elapsed, f"{type(exc).__name__}: {exc}")
 
     elapsed = (time.perf_counter() - started) * 1000
-    text = response.content if isinstance(response.content, str) else str(response.content)
-    return Check("text", model, True, elapsed, text.strip()[:60])
+    content = response.content
+    if isinstance(content, list):
+        content = "".join(
+            block.get("text", "") for block in content if isinstance(block, dict)
+        )
+    return Check("text", model, True, elapsed, str(content).strip()[:60])
 
 
-async def run_checks(settings: Settings | None = None) -> list[Check]:
-    """Ping all three roles concurrently and return their outcomes."""
+async def run_checks(settings: Settings | None = None, api_key: str | None = None) -> list[Check]:
+    """Ping all three roles concurrently, against one specific key, and
+    return their outcomes. Defaults to the primary key when none is given."""
     settings = settings or get_settings()
-    api_key = settings.require_api_key()
+    api_key = api_key or settings.require_api_key()
 
     text_check = (
         _ping_text_native_genai(settings.text_model, api_key)
@@ -190,6 +195,33 @@ def report(checks: list[Check]) -> int:
     return 0
 
 
+def _mask(key: str) -> str:
+    return f"...{key[-6:]}" if len(key) > 10 else key
+
+
+async def run_pool_checks(settings: Settings) -> dict[str, list[Check]]:
+    """Verify every key in the round-robin pool independently, not just the
+    primary — a key can auth fine yet 404 on the shared model, or vice versa."""
+    results: dict[str, list[Check]] = {}
+    for key in settings.api_key_pool:
+        results[_mask(key)] = await run_checks(settings, api_key=key)
+    return results
+
+
+def report_pool(results: dict[str, list[Check]]) -> int:
+    exit_code = 0
+    for label, checks in results.items():
+        print(f"key {label}:")
+        if report(checks) != 0:
+            exit_code = 1
+        print()
+    if exit_code == 0:
+        print(f"All {len(results)} key(s) in the pool are usable.")
+    else:
+        print("At least one key in the pool failed — see above.")
+    return exit_code
+
+
 def main() -> int:
     try:
         settings = get_settings()
@@ -199,7 +231,7 @@ def main() -> int:
         return 2
 
     print(f"Endpoint: {settings.llm_base_url}\n")
-    return report(asyncio.run(run_checks(settings)))
+    return report_pool(asyncio.run(run_pool_checks(settings)))
 
 
 if __name__ == "__main__":
